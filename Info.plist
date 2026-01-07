@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>OverlayTranslator</string>
+    <key>CFBundleName</key>
+    <string>Overlay Translator</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.overlay.translator</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Overlay Translator needs screen capture access to read text from your screen and translate it.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Overlay Translator needs accessibility access for global keyboard shortcuts.</string>
+</dict>
+</plist>
+

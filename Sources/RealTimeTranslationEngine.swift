@@ -1,0 +1,352 @@
+import Foundation
+import AppKit
+import Vision
+import CryptoKit
+import os.log
+
+let logger = Logger(subsystem: "com.overlay.translator", category: "engine")
+
+// Global log function that uses TranslatorState's log path
+var globalLogPath = "/tmp/overlay_translator.log"
+
+func logToFile(_ message: String) {
+    let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+    let line = "[\(timestamp)] \(message)\n"
+    if let data = line.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: globalLogPath) {
+            if let handle = FileHandle(forWritingAtPath: globalLogPath) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            }
+        } else {
+            try? data.write(to: URL(fileURLWithPath: globalLogPath))
+        }
+    }
+}
+
+struct TranslatedTextBlock {
+    let originalText: String
+    let translatedText: String
+    let boundingBox: CGRect
+    let confidence: Float
+}
+
+class RealTimeTranslationEngine {
+    private let sourceLanguage: String
+    private let targetLanguage: String
+    private let translatorState: TranslatorState
+    private let onUpdate: ([TranslatedTextBlock]) -> Void
+    private let onClear: () -> Void
+    
+    private var isRunning = false
+    private var captureTask: Task<Void, Never>?
+    
+    // Thread-safe cache
+    private let cacheQueue = DispatchQueue(label: "translation.cache")
+    private var _translationCache: [String: String] = [:]
+    private var translationCache: [String: String] {
+        get { cacheQueue.sync { _translationCache } }
+        set { cacheQueue.sync { _translationCache = newValue } }
+    }
+    
+    // Change detection
+    private var lastImageHash: String = ""
+    private var lastWindowPID: Int32 = 0  // Track window changes
+    
+    // Timing
+    private let captureInterval: TimeInterval = 0.8
+    private var lastTranslationTime: Date = .distantPast
+    private let translationDelay: TimeInterval = 0.2
+    private var isTranslating = false
+    
+    init(sourceLanguage: String, targetLanguage: String, translatorState: TranslatorState, onUpdate: @escaping ([TranslatedTextBlock]) -> Void, onClear: @escaping () -> Void = {}) {
+        self.sourceLanguage = sourceLanguage
+        self.targetLanguage = targetLanguage
+        self.translatorState = translatorState
+        self.onUpdate = onUpdate
+        self.onClear = onClear
+        
+        // Set global log path from settings
+        globalLogPath = translatorState.logFilePath
+    }
+    
+    func start() {
+        guard !isRunning else { return }
+        isRunning = true
+        logToFile("▶️ Translation engine started")
+        
+        captureTask = Task { [weak self] in
+            await self?.runCaptureLoop()
+        }
+    }
+    
+    func stop() {
+        isRunning = false
+        captureTask?.cancel()
+        captureTask = nil
+        logToFile("⏹️ Translation engine stopped")
+    }
+    
+    private func runCaptureLoop() async {
+        while isRunning && !Task.isCancelled {
+            do {
+                if isTranslating {
+                    try await Task.sleep(nanoseconds: 300_000_000)
+                    continue
+                }
+                
+                guard let (image, windowBounds, currentPID) = captureFrontmostWindow() else {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                }
+                
+                // Clear translations if window changed
+                if currentPID != lastWindowPID && lastWindowPID != 0 {
+                    logToFile("🔄 Window changed - clearing translations")
+                    lastImageHash = ""
+                    onClear()
+                }
+                lastWindowPID = currentPID
+                
+                logToFile("📸 Captured window: \(Int(windowBounds.width))x\(Int(windowBounds.height))")
+                
+                let currentHash = hashImage(image)
+                if currentHash == lastImageHash {
+                    try await Task.sleep(nanoseconds: UInt64(captureInterval * 1_000_000_000))
+                    continue
+                }
+                lastImageHash = currentHash
+                
+                let textObservations = try await performOCR(on: image)
+                logToFile("📝 OCR found \(textObservations.count) text regions")
+                
+                let groupedObservations = groupObservations(textObservations)
+                
+                isTranslating = true
+                let blocks = await translateGroups(groupedObservations, windowBounds: windowBounds)
+                isTranslating = false
+                
+                logToFile("📊 Created \(blocks.count) translation blocks")
+                onUpdate(blocks)
+                
+                try await Task.sleep(nanoseconds: UInt64(captureInterval * 1_000_000_000))
+                
+            } catch {
+                logToFile("❌ Error: \(error.localizedDescription)")
+                isTranslating = false
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
+    
+    private func captureFrontmostWindow() -> (NSImage, CGRect, Int32)? {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication,
+              frontApp.bundleIdentifier != Bundle.main.bundleIdentifier else {
+            return nil
+        }
+        
+        let pid = frontApp.processIdentifier
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        
+        for window in windowList {
+            guard let ownerPID = window[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID == pid,
+                  let windowID = window[kCGWindowNumber as String] as? CGWindowID,
+                  let boundsDict = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == 0 else { continue }
+            
+            let bounds = CGRect(
+                x: boundsDict["X"] ?? 0,
+                y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0,
+                height: boundsDict["Height"] ?? 0
+            )
+            
+            guard bounds.width > 300, bounds.height > 300 else { continue }
+            
+            guard let cgImage = CGWindowListCreateImage(
+                bounds, .optionIncludingWindow, windowID, [.boundsIgnoreFraming]
+            ) else { continue }
+            
+            return (NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height)), bounds, pid)
+        }
+        return nil
+    }
+    
+    private func hashImage(_ image: NSImage) -> String {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else {
+            return UUID().uuidString
+        }
+        
+        var samples: [UInt8] = []
+        let stepX = max(1, bitmap.pixelsWide / 15)
+        let stepY = max(1, bitmap.pixelsHigh / 15)
+        
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: stepY) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: stepX) {
+                if let color = bitmap.colorAt(x: x, y: y) {
+                    samples.append(UInt8(color.redComponent * 255))
+                }
+            }
+        }
+        
+        let hash = SHA256.hash(data: Data(samples))
+        return hash.compactMap { String(format: "%02x", $0) }.joined().prefix(12).description
+    }
+    
+    private func performOCR(on image: NSImage) async throws -> [VNRecognizedTextObservation] {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            throw NSError(domain: "OCR", code: 1)
+        }
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            let request = VNRecognizeTextRequest { request, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                continuation.resume(returning: request.results as? [VNRecognizedTextObservation] ?? [])
+            }
+            
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            request.recognitionLanguages = ["fr-FR", "en-US"]
+            
+            do {
+                try VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+    
+    private func groupObservations(_ observations: [VNRecognizedTextObservation]) -> [[(String, CGRect)]] {
+        var groups: [[(String, CGRect, VNRecognizedTextObservation)]] = []
+        
+        for observation in observations {
+            guard let candidate = observation.topCandidates(1).first else { continue }
+            let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            guard text.count >= 2 else { continue }
+            if text.contains(".fr/") || text.contains(".com/") || text.contains("http") { continue }
+            if text.contains("|") || text.contains("O|") { continue }
+            
+            if translatorState.shouldIgnoreText(text) {
+                logToFile("   ⛔ Ignored: '\(text)'")
+                continue
+            }
+            
+            let letterCount = text.filter { $0.isLetter }.count
+            guard letterCount >= 2 else { continue }
+            
+            logToFile("   ✓ Valid text: '\(text)'")
+            
+            let box = observation.boundingBox
+            
+            var addedToGroup = false
+            for i in 0..<groups.count {
+                for (_, existingBox, _) in groups[i] {
+                    let verticalGap = abs(box.minY - existingBox.maxY)
+                    let verticalGap2 = abs(existingBox.minY - box.maxY)
+                    let minVerticalGap = min(verticalGap, verticalGap2)
+                    
+                    let horizontalOverlap = max(0, min(box.maxX, existingBox.maxX) - max(box.minX, existingBox.minX))
+                    let minWidth = min(box.width, existingBox.width)
+                    
+                    if minVerticalGap < 0.05 && horizontalOverlap > minWidth * 0.3 {
+                        groups[i].append((text, box, observation))
+                        addedToGroup = true
+                        break
+                    }
+                }
+                if addedToGroup { break }
+            }
+            
+            if !addedToGroup {
+                groups.append([(text, box, observation)])
+            }
+        }
+        
+        return groups.map { group in
+            group.sorted { $0.1.minY > $1.1.minY }
+                 .map { ($0.0, $0.1) }
+        }
+    }
+    
+    private func translateGroups(_ groups: [[(String, CGRect)]], windowBounds: CGRect) async -> [TranslatedTextBlock] {
+        var blocks: [TranslatedTextBlock] = []
+        
+        for group in groups {
+            let combinedText = group.map { $0.0 }.joined(separator: " ")
+            
+            guard combinedText.count >= 3 else { continue }
+            let letterCount = combinedText.filter { $0.isLetter }.count
+            guard letterCount >= 3 else { continue }
+            
+            if translatorState.shouldIgnoreText(combinedText) {
+                logToFile("   ⛔ Ignored combined: '\(combinedText)'")
+                continue
+            }
+            
+            if combinedText.contains(".fr/") || combinedText.contains(".com/") { continue }
+            if combinedText.contains("|") { continue }
+            
+            let translation: String
+            let cachedValue = cacheQueue.sync { _translationCache[combinedText] }
+            
+            if let cached = cachedValue {
+                translation = cached
+            } else {
+                let elapsed = Date().timeIntervalSince(lastTranslationTime)
+                if elapsed < translationDelay {
+                    try? await Task.sleep(nanoseconds: UInt64((translationDelay - elapsed) * 1_000_000_000))
+                }
+                lastTranslationTime = Date()
+                
+                logToFile("🌐 Translating: '\(combinedText.prefix(40))...'")
+                
+                do {
+                    translation = try await TranslationService.translate(
+                        text: combinedText,
+                        from: sourceLanguage,
+                        to: targetLanguage
+                    )
+                    logToFile("✅ Got: '\(translation.prefix(40))...'")
+                    cacheQueue.sync { _translationCache[combinedText] = translation }
+                } catch {
+                    logToFile("❌ Failed: \(error.localizedDescription)")
+                    continue
+                }
+            }
+            
+            let minX = group.map { $0.1.minX }.min() ?? 0
+            let maxX = group.map { $0.1.maxX }.max() ?? 0
+            let minY = group.map { $0.1.minY }.min() ?? 0
+            let maxY = group.map { $0.1.maxY }.max() ?? 0
+            
+            let groupBox = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+            
+            let screenRect = CGRect(
+                x: windowBounds.origin.x + groupBox.origin.x * windowBounds.width,
+                y: windowBounds.origin.y + (1 - groupBox.origin.y - groupBox.height) * windowBounds.height,
+                width: groupBox.width * windowBounds.width,
+                height: groupBox.height * windowBounds.height
+            )
+            
+            blocks.append(TranslatedTextBlock(
+                originalText: combinedText,
+                translatedText: translation,
+                boundingBox: screenRect,
+                confidence: 1.0
+            ))
+        }
+        
+        return blocks
+    }
+}
