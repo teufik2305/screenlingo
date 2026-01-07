@@ -54,10 +54,10 @@ class RealTimeTranslationEngine {
     private var lastImageHash: String = ""
     private var lastWindowPID: Int32 = 0  // Track window changes
     
-    // Timing
-    private let captureInterval: TimeInterval = 0.8
+    // Timing - optimized for speed
+    private let captureInterval: TimeInterval = 0.4  // Was 0.8
     private var lastTranslationTime: Date = .distantPast
-    private let translationDelay: TimeInterval = 0.2
+    private let translationDelay: TimeInterval = 0.05  // Was 0.2
     private var isTranslating = false
     
     init(sourceLanguage: String, targetLanguage: String, translatorState: TranslatorState, onUpdate: @escaping ([TranslatedTextBlock]) -> Void, onClear: @escaping () -> Void = {}) {
@@ -92,12 +92,12 @@ class RealTimeTranslationEngine {
         while isRunning && !Task.isCancelled {
             do {
                 if isTranslating {
-                    try await Task.sleep(nanoseconds: 300_000_000)
+                    try await Task.sleep(nanoseconds: 100_000_000)  // 100ms instead of 300ms
                     continue
                 }
                 
                 guard let (image, windowBounds, currentPID) = captureFrontmostWindow() else {
-                    try await Task.sleep(nanoseconds: 500_000_000)
+                    try await Task.sleep(nanoseconds: 200_000_000)  // 200ms instead of 500ms
                     continue
                 }
                 
@@ -280,7 +280,8 @@ class RealTimeTranslationEngine {
     }
     
     private func translateGroups(_ groups: [[(String, CGRect)]], windowBounds: CGRect) async -> [TranslatedTextBlock] {
-        var blocks: [TranslatedTextBlock] = []
+        // Prepare valid groups first
+        var validGroups: [(text: String, box: CGRect)] = []
         
         for group in groups {
             let combinedText = group.map { $0.0 }.joined(separator: " ")
@@ -289,64 +290,69 @@ class RealTimeTranslationEngine {
             let letterCount = combinedText.filter { $0.isLetter }.count
             guard letterCount >= 3 else { continue }
             
-            if translatorState.shouldIgnoreText(combinedText) {
-                logToFile("   ⛔ Ignored combined: '\(combinedText)'")
-                continue
-            }
-            
+            if translatorState.shouldIgnoreText(combinedText) { continue }
             if combinedText.contains(".fr/") || combinedText.contains(".com/") { continue }
             if combinedText.contains("|") { continue }
-            
-            let translation: String
-            let cachedValue = cacheQueue.sync { _translationCache[combinedText] }
-            
-            if let cached = cachedValue {
-                translation = cached
-            } else {
-                let elapsed = Date().timeIntervalSince(lastTranslationTime)
-                if elapsed < translationDelay {
-                    try? await Task.sleep(nanoseconds: UInt64((translationDelay - elapsed) * 1_000_000_000))
-                }
-                lastTranslationTime = Date()
-                
-                logToFile("🌐 Translating: '\(combinedText.prefix(40))...'")
-                
-                do {
-                    translation = try await TranslationService.translate(
-                        text: combinedText,
-                        from: sourceLanguage,
-                        to: targetLanguage
-                    )
-                    logToFile("✅ Got: '\(translation.prefix(40))...'")
-                    cacheQueue.sync { _translationCache[combinedText] = translation }
-                } catch {
-                    logToFile("❌ Failed: \(error.localizedDescription)")
-                    continue
-                }
-            }
             
             let minX = group.map { $0.1.minX }.min() ?? 0
             let maxX = group.map { $0.1.maxX }.max() ?? 0
             let minY = group.map { $0.1.minY }.min() ?? 0
             let maxY = group.map { $0.1.maxY }.max() ?? 0
-            
             let groupBox = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
             
-            let screenRect = CGRect(
-                x: windowBounds.origin.x + groupBox.origin.x * windowBounds.width,
-                y: windowBounds.origin.y + (1 - groupBox.origin.y - groupBox.height) * windowBounds.height,
-                width: groupBox.width * windowBounds.width,
-                height: groupBox.height * windowBounds.height
-            )
-            
-            blocks.append(TranslatedTextBlock(
-                originalText: combinedText,
-                translatedText: translation,
-                boundingBox: screenRect,
-                confidence: 1.0
-            ))
+            validGroups.append((combinedText, groupBox))
         }
         
-        return blocks
+        // Translate in parallel (up to 5 concurrent)
+        return await withTaskGroup(of: TranslatedTextBlock?.self) { taskGroup in
+            var blocks: [TranslatedTextBlock] = []
+            
+            for (text, groupBox) in validGroups {
+                taskGroup.addTask { [self] in
+                    let translation: String
+                    let cachedValue = cacheQueue.sync { _translationCache[text] }
+                    
+                    if let cached = cachedValue {
+                        translation = cached
+                    } else {
+                        logToFile("🌐 Translating: '\(text.prefix(40))...'")
+                        do {
+                            translation = try await TranslationService.translate(
+                                text: text,
+                                from: sourceLanguage,
+                                to: targetLanguage
+                            )
+                            logToFile("✅ Got: '\(translation.prefix(40))...'")
+                            cacheQueue.sync { _translationCache[text] = translation }
+                        } catch {
+                            logToFile("❌ Failed: \(error.localizedDescription)")
+                            return nil
+                        }
+                    }
+                    
+                    let screenRect = CGRect(
+                        x: windowBounds.origin.x + groupBox.origin.x * windowBounds.width,
+                        y: windowBounds.origin.y + (1 - groupBox.origin.y - groupBox.height) * windowBounds.height,
+                        width: groupBox.width * windowBounds.width,
+                        height: groupBox.height * windowBounds.height
+                    )
+                    
+                    return TranslatedTextBlock(
+                        originalText: text,
+                        translatedText: translation,
+                        boundingBox: screenRect,
+                        confidence: 1.0
+                    )
+                }
+            }
+            
+            for await block in taskGroup {
+                if let block = block {
+                    blocks.append(block)
+                }
+            }
+            
+            return blocks
+        }
     }
 }

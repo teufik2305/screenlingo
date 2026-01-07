@@ -9,6 +9,10 @@ class RealTimeOverlayView: NSView {
     private let onIgnoreText: (String) -> Void
     private var clickMonitor: Any?
     
+    // Position stabilization - prevents "breathing" effect
+    private var stablePositions: [String: CGRect] = [:]
+    private let stabilityThreshold: CGFloat = 15  // Only update if moved more than 15px
+    
     init(frame: NSRect, translatorState: TranslatorState, onIgnoreText: @escaping (String) -> Void) {
         self.translatorState = translatorState
         self.onIgnoreText = onIgnoreText
@@ -159,12 +163,48 @@ class RealTimeOverlayView: NSView {
     }
     
     func updateTextBlocks(_ blocks: [TranslatedTextBlock]) {
-        self.textBlocks = blocks
+        // Stabilize positions to prevent "breathing" effect
+        var stabilizedBlocks: [TranslatedTextBlock] = []
+        
+        for block in blocks {
+            let key = block.originalText
+            
+            if let existingRect = stablePositions[key] {
+                // Check if position changed significantly
+                let dx = abs(block.boundingBox.midX - existingRect.midX)
+                let dy = abs(block.boundingBox.midY - existingRect.midY)
+                
+                if dx < stabilityThreshold && dy < stabilityThreshold {
+                    // Keep old position (prevents jitter)
+                    stabilizedBlocks.append(TranslatedTextBlock(
+                        originalText: block.originalText,
+                        translatedText: block.translatedText,
+                        boundingBox: existingRect,
+                        confidence: block.confidence
+                    ))
+                } else {
+                    // Position changed significantly, update it
+                    stablePositions[key] = block.boundingBox
+                    stabilizedBlocks.append(block)
+                }
+            } else {
+                // New block, store its position
+                stablePositions[key] = block.boundingBox
+                stabilizedBlocks.append(block)
+            }
+        }
+        
+        // Clean up old positions (for blocks that are gone)
+        let currentKeys = Set(blocks.map { $0.originalText })
+        stablePositions = stablePositions.filter { currentKeys.contains($0.key) }
+        
+        self.textBlocks = stabilizedBlocks
         needsDisplay = true
     }
     
     func clearBlocks() {
         self.textBlocks = []
+        self.stablePositions = [:]  // Clear stabilization cache
         hoveredBlockIndex = nil
         needsDisplay = true
     }
