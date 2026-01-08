@@ -13,6 +13,10 @@ rm -rf "$APP_BUNDLE"
 rm -rf AppIcon.appiconset
 rm -f AppIcon.icns
 
+# Clean Swift build cache to ensure fresh build
+echo "🧹 Cleaning build cache..."
+swift package clean
+
 # Build release version
 swift build -c release
 

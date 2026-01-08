@@ -35,6 +35,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     var overlayView: RealTimeOverlayView?
     var translationEngine: RealTimeTranslationEngine?
     private var settingsWindowController: SettingsWindowController?
+    private var globalHotkeyMonitor: Any?
+    private var accessibilityTimer: Timer?
     
     @Published var isTranslating = false
     @Published var hiddenOverlays: [(original: String, translated: String)] = []
@@ -46,27 +48,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if !screenCaptureGranted {
             print("[Permission] Requesting Screen Recording permission...")
             print("             Grant permission in the system dialog, then RESTART the app")
-            // This shows the system dialog or opens System Settings
-            // Don't show our custom alert here - let the engine detect if capture actually fails
             CGRequestScreenCaptureAccess()
         } else {
             print("[Permission] Screen Recording OK")
         }
         
-        // Check accessibility (for global hotkeys)
-        if !AXIsProcessTrusted() {
-            print("[Permission] Accessibility recommended for global hotkey (Cmd+Ctrl+T)")
-        }
+        // Check and request accessibility (required for global hotkeys)
+        // This will show the system prompt if not already granted
+        let accessibilityGranted = AXIsProcessTrustedWithOptions(
+            [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+        )
         
-        // Register global hotkey for toggle (Cmd+Control+T)
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.modifierFlags.contains([.command, .control]) && event.keyCode == 17 {
-                DispatchQueue.main.async {
-                    self?.toggleTranslation()
-                }
+        if accessibilityGranted {
+            print("[Permission] Accessibility OK")
+            registerGlobalHotkey()
+        } else {
+            print("[Permission] Accessibility required for global hotkey (Cmd+Ctrl+T)")
+            print("             Grant permission in System Settings > Privacy & Security > Accessibility")
+            // Start polling - will register hotkey once permission is granted
+            startAccessibilityPolling()
+            // Show alert after a longer delay - gives user time to interact with system prompt
+            // The alert will be skipped if permission is granted in the meantime
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                self?.showAccessibilityAlert()
             }
         }
         
+        // Local monitor always works (for when app window is focused)
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.modifierFlags.contains([.command, .control]) && event.keyCode == 17 {
                 DispatchQueue.main.async {
@@ -86,6 +94,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         
         print("Overlay Translator started! Press Cmd+Ctrl+T to toggle.")
+    }
+    
+    private func registerGlobalHotkey() {
+        // Don't register twice
+        guard globalHotkeyMonitor == nil else { return }
+        
+        globalHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.modifierFlags.contains([.command, .control]) && event.keyCode == 17 {
+                DispatchQueue.main.async {
+                    self?.toggleTranslation()
+                }
+            }
+        }
+        
+        if globalHotkeyMonitor != nil {
+            print("[Hotkey] Global hotkey (Cmd+Ctrl+T) registered successfully")
+        }
+    }
+    
+    private func startAccessibilityPolling() {
+        // Poll every 1 second to check if user granted accessibility
+        accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            if AXIsProcessTrusted() {
+                print("[Permission] Accessibility granted!")
+                timer.invalidate()
+                self?.accessibilityTimer = nil
+                self?.registerGlobalHotkey()
+            }
+        }
     }
     
     func toggleTranslation() {
@@ -211,8 +248,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            // Open Screen Recording settings directly
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        
+        NSApp.setActivationPolicy(.accessory)
+    }
+    
+    private func showAccessibilityAlert() {
+        // Skip if accessibility was granted in the meantime
+        guard !AXIsProcessTrusted() else { return }
+        
+        let alert = NSAlert()
+        alert.messageText = "Accessibility Permission Required"
+        alert.informativeText = """
+        ScreenLingo needs Accessibility permission for the global keyboard shortcut (Cmd+Ctrl+T).
+        
+        Please grant permission in System Settings:
+        1. Click "Open Settings" below
+        2. Find ScreenLingo and toggle it ON
+        3. The shortcut will work immediately (no restart needed)
+        
+        If ScreenLingo isn't listed or the shortcut doesn't work:
+        1. Remove ScreenLingo from the list (click -)
+        2. Quit and restart this app
+        3. Grant permission when prompted
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Later")
+        
+        // Must become a regular app to show alerts properly
+        NSApp.setActivationPolicy(.regular)
+        
+        // Force the app to come to front
+        NSApp.activate(ignoringOtherApps: true)
+        
+        // Small delay to ensure activation takes effect
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            // Open Accessibility settings directly
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                 NSWorkspace.shared.open(url)
             }
         }

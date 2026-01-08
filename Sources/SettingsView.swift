@@ -598,11 +598,11 @@ struct AdvancedSettingsTab: View {
     }
     
     private func groupingLabel(_ value: Double) -> String {
-        if value <= 0.5 { return "Strict" }
-        if value <= 0.75 { return "Tight" }
+        if value <= 0.5 { return "Minimal" }
+        if value <= 0.75 { return "Light" }
         if value <= 1.25 { return "Normal" }
-        if value <= 1.75 { return "Loose" }
-        return "Aggressive"
+        if value <= 1.75 { return "Strong" }
+        return "Maximum"
     }
     
     private func logLevelDescription(_ level: Int) -> String {

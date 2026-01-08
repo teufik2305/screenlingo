@@ -126,11 +126,15 @@ enum TranslationServiceType: Int, CaseIterable {
 }
 
 class TranslatorState: ObservableObject {
-    @AppStorage("sourceLanguage") var sourceLanguage: String = "fr"
-    @AppStorage("targetLanguage") var targetLanguage: String = "en"
-    @AppStorage("overlayOpacity") var overlayOpacity: Double = 0.95
-    @AppStorage("fontSize") var fontSize: Double = 20
-    @AppStorage("interactionMode") var interactionModeRaw: Int = 0  // 0=click, 1=hover
+    // Use a consistent UserDefaults suite so both direct binary and app bundle share settings
+    // Note: Cannot use bundle identifier as suite name, so we use a different name
+    static let preferencesStore = UserDefaults(suiteName: "com.screenlingo.shared")!
+    
+    @AppStorage("sourceLanguage", store: TranslatorState.preferencesStore) var sourceLanguage: String = "fr"
+    @AppStorage("targetLanguage", store: TranslatorState.preferencesStore) var targetLanguage: String = "en"
+    @AppStorage("overlayOpacity", store: TranslatorState.preferencesStore) var overlayOpacity: Double = 0.95
+    @AppStorage("fontSize", store: TranslatorState.preferencesStore) var fontSize: Double = 20
+    @AppStorage("interactionMode", store: TranslatorState.preferencesStore) var interactionModeRaw: Int = 0  // 0=click, 1=hover
     
     var interactionMode: InteractionMode {
         get { InteractionMode(rawValue: interactionModeRaw) ?? .click }
@@ -144,9 +148,9 @@ class TranslatorState: ObservableObject {
     var hideOnHover: Bool { interactionMode == .hover }
     
     // Logging settings
-    @AppStorage("logFilePath") var logFilePath: String = "/tmp/overlay_translator.log"
-    @AppStorage("logLevel") var logLevelRaw: Int = 1  // 0=debug, 1=info, 2=warning, 3=error
-    @AppStorage("enableFileLogging") var enableFileLogging: Bool = true
+    @AppStorage("logFilePath", store: TranslatorState.preferencesStore) var logFilePath: String = "/tmp/overlay_translator.log"
+    @AppStorage("logLevel", store: TranslatorState.preferencesStore) var logLevelRaw: Int = 1  // 0=debug, 1=info, 2=warning, 3=error
+    @AppStorage("enableFileLogging", store: TranslatorState.preferencesStore) var enableFileLogging: Bool = true
     
     var logLevel: LogLevel {
         get { LogLevel(rawValue: logLevelRaw) ?? .info }
@@ -154,12 +158,12 @@ class TranslatorState: ObservableObject {
     }
     
     // Translation settings
-    @AppStorage("translationService") var translationServiceRaw: Int = 0  // 0=apple, 1=ltEngine, 2=google
-    @AppStorage("customApiUrl") var customApiUrl: String = ""
+    @AppStorage("translationService", store: TranslatorState.preferencesStore) var translationServiceRaw: Int = 0  // 0=apple, 1=ltEngine, 2=google
+    @AppStorage("customApiUrl", store: TranslatorState.preferencesStore) var customApiUrl: String = ""
     
     // LTEngine / LibreTranslate settings
-    @AppStorage("libreTranslateUrl") var libreTranslateUrl: String = "http://localhost:5000/translate"
-    @AppStorage("libreTranslateApiKey") var libreTranslateApiKey: String = ""  // Optional API key
+    @AppStorage("libreTranslateUrl", store: TranslatorState.preferencesStore) var libreTranslateUrl: String = "http://localhost:5000/translate"
+    @AppStorage("libreTranslateApiKey", store: TranslatorState.preferencesStore) var libreTranslateApiKey: String = ""  // Optional API key
     
     // Computed property for translation service
     var translationService: TranslationServiceType {
@@ -185,16 +189,16 @@ class TranslatorState: ObservableObject {
     var useAppleTranslation: Bool { translationService == .apple }
     
     // Legacy settings (kept for compatibility)
-    @AppStorage("useDeepL") var useDeepL: Bool = false
-    @AppStorage("deepLApiKey") var deepLApiKey: String = ""
+    @AppStorage("useDeepL", store: TranslatorState.preferencesStore) var useDeepL: Bool = false
+    @AppStorage("deepLApiKey", store: TranslatorState.preferencesStore) var deepLApiKey: String = ""
     
     // Performance settings
-    @AppStorage("captureInterval") var captureInterval: Double = 0.05  // 50ms default - how often to capture screen
-    @AppStorage("stabilityThreshold") var stabilityThreshold: Double = 15  // px - movement below this is ignored to prevent jitter
-    @AppStorage("ocrAccurate") var ocrAccurate: Bool = true  // true=accurate (slower), false=fast
-    @AppStorage("maxCacheSize") var maxCacheSize: Int = 500  // max translations to cache
-    @AppStorage("minTextLength") var minTextLength: Int = 3  // minimum characters to translate
-    @AppStorage("textGrouping") var textGrouping: Double = 1.0  // 0.5=strict, 1.0=normal, 2.0=aggressive
+    @AppStorage("captureInterval", store: TranslatorState.preferencesStore) var captureInterval: Double = 0.05  // 50ms default - how often to capture screen
+    @AppStorage("stabilityThreshold", store: TranslatorState.preferencesStore) var stabilityThreshold: Double = 15  // px - movement below this is ignored to prevent jitter
+    @AppStorage("ocrAccurate", store: TranslatorState.preferencesStore) var ocrAccurate: Bool = true  // true=accurate (slower), false=fast
+    @AppStorage("maxCacheSize", store: TranslatorState.preferencesStore) var maxCacheSize: Int = 500  // max translations to cache
+    @AppStorage("minTextLength", store: TranslatorState.preferencesStore) var minTextLength: Int = 3  // minimum characters to translate
+    @AppStorage("textGrouping", store: TranslatorState.preferencesStore) var textGrouping: Double = 1.0  // 0.5=strict, 1.0=normal, 2.0=aggressive
     
     static let clearCacheNotification = Notification.Name("clearTranslationCache")
     
@@ -203,7 +207,7 @@ class TranslatorState: ObservableObject {
     static let defaultLibreTranslateUrl = "http://localhost:5000/translate"
     
     // Excluded apps - stored as comma-separated bundle IDs
-    @AppStorage("excludedApps") private var excludedAppsString: String = "com.todesktop.230313mzl4w4u92,com.microsoft.VSCode,com.apple.dt.Xcode"
+    @AppStorage("excludedApps", store: TranslatorState.preferencesStore) private var excludedAppsString: String = "com.todesktop.230313mzl4w4u92,com.microsoft.VSCode,com.apple.dt.Xcode"
     
     var excludedApps: [String] {
         get {
@@ -237,7 +241,7 @@ class TranslatorState: ObservableObject {
     }
     
     // Ignore list - stored as comma-separated string in UserDefaults
-    @AppStorage("ignoredPatterns") private var ignoredPatternsString: String = ""
+    @AppStorage("ignoredPatterns", store: TranslatorState.preferencesStore) private var ignoredPatternsString: String = ""
     
     var ignoredPatterns: [String] {
         get {
