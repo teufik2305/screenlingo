@@ -29,22 +29,27 @@ struct MenuBarView: View {
             
             Divider()
             
-            // Source language menu
+            // Translation service selector
             Menu {
-                ForEach(TranslatorState.supportedLanguages, id: \.code) { lang in
-                    Button(action: { state.sourceLanguage = lang.code }) {
+                ForEach(TranslationServiceType.allCases, id: \.rawValue) { service in
+                    Button(action: { state.translationService = service }) {
                         HStack {
-                            Text(lang.name)
-                            if state.sourceLanguage == lang.code {
+                            Image(systemName: service.icon)
+                            Text(service.name)
+                            if state.translationService == service {
                                 Spacer()
                                 Image(systemName: "checkmark")
                             }
                         }
                     }
+                    .disabled(service == .apple && !TranslationService.isAppleTranslationAvailable)
                 }
             } label: {
                 HStack {
-                    Text("From: \(state.languageName(for: state.sourceLanguage))")
+                    Image(systemName: state.translationService.icon)
+                        .foregroundStyle(state.translationService.color)
+                        .frame(width: 16)
+                    Text(state.translationService.name)
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2)
@@ -55,13 +60,70 @@ struct MenuBarView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             
-            // Target language menu
+            Divider()
+            
+            // Language row with swap button
+            HStack(spacing: 8) {
+                // Source language menu
+                Menu {
+                    ForEach(state.availableSourceLanguages, id: \.code) { lang in
+                        Button(action: { state.sourceLanguage = lang.code }) {
+                            HStack {
+                                Text(lang.name)
+                                if state.sourceLanguage == lang.code {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Text(state.languageName(for: state.sourceLanguage))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .disabled(appDelegate.isTranslating)
+                
+                // Swap button
+                Button(action: { state.swapLanguages() }) {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .font(.caption)
+                        .foregroundStyle(state.sourceLanguage == "auto" ? .tertiary : .secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(appDelegate.isTranslating || state.sourceLanguage == "auto")
+                
+                // Target language menu
+                Menu {
+                    ForEach(state.availableLanguages, id: \.code) { lang in
+                        Button(action: { state.targetLanguage = lang.code }) {
+                            HStack {
+                                Text(lang.name)
+                                if state.targetLanguage == lang.code {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Text(state.languageName(for: state.targetLanguage))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .disabled(appDelegate.isTranslating)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            
+            Divider()
+            
+            // Interaction mode selector
             Menu {
-                ForEach(TranslatorState.supportedLanguages, id: \.code) { lang in
-                    Button(action: { state.targetLanguage = lang.code }) {
+                ForEach(InteractionMode.allCases, id: \.rawValue) { mode in
+                    Button(action: { state.interactionMode = mode }) {
                         HStack {
-                            Text(lang.name)
-                            if state.targetLanguage == lang.code {
+                            Image(systemName: mode.icon)
+                            Text(mode.name)
+                            if state.interactionMode == mode {
                                 Spacer()
                                 Image(systemName: "checkmark")
                             }
@@ -70,14 +132,16 @@ struct MenuBarView: View {
                 }
             } label: {
                 HStack {
-                    Text("To: \(state.languageName(for: state.targetLanguage))")
+                    Image(systemName: state.interactionMode.icon)
+                        .foregroundStyle(state.interactionMode.color)
+                        .frame(width: 16)
+                    Text(state.interactionMode.name)
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
-            .disabled(appDelegate.isTranslating)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             
@@ -114,6 +178,25 @@ struct MenuBarView: View {
             }
             
             Divider()
+            
+            // Clear Cache
+            Button(action: { appDelegate.clearTranslationCache() }) {
+                HStack {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.secondary)
+                    Text("Clear Cache")
+                    Spacer()
+                    if appDelegate.cacheSize > 0 {
+                        Text("\(appDelegate.cacheSize)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .disabled(!appDelegate.isTranslating)
             
             // Settings
             Button(action: { appDelegate.openSettings() }) {

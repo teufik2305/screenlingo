@@ -12,7 +12,6 @@ class RealTimeOverlayView: NSView {
     
     // Position stabilization - prevents "breathing" effect
     private var stablePositions: [String: CGRect] = [:]
-    private let stabilityThreshold: CGFloat = 15  // Only update if moved more than 15px
     
     init(frame: NSRect, translatorState: TranslatorState, onIgnoreText: @escaping (String) -> Void, onHiddenChanged: @escaping ([(original: String, translated: String)]) -> Void = { _ in }) {
         self.translatorState = translatorState
@@ -175,6 +174,7 @@ class RealTimeOverlayView: NSView {
     func updateTextBlocks(_ blocks: [TranslatedTextBlock]) {
         // Stabilize positions to prevent "breathing" effect
         var stabilizedBlocks: [TranslatedTextBlock] = []
+        let threshold = CGFloat(translatorState.stabilityThreshold)
         
         for block in blocks {
             let key = block.originalText
@@ -184,7 +184,7 @@ class RealTimeOverlayView: NSView {
                 let dx = abs(block.boundingBox.midX - existingRect.midX)
                 let dy = abs(block.boundingBox.midY - existingRect.midY)
                 
-                if dx < stabilityThreshold && dy < stabilityThreshold {
+                if dx < threshold && dy < threshold {
                     // Keep old position (prevents jitter)
                     stabilizedBlocks.append(TranslatedTextBlock(
                         originalText: block.originalText,
@@ -239,16 +239,8 @@ class RealTimeOverlayView: NSView {
     }
     
     private func drawBlock(_ block: TranslatedTextBlock, screenHeight: CGFloat, isHovered: Bool) {
-        // Use original bounding box directly
         let box = block.boundingBox
-        let rect = CGRect(
-            x: box.origin.x,
-            y: screenHeight - box.origin.y - box.height,
-            width: box.width,
-            height: box.height
-        )
-        
-        guard rect.width > 20, rect.height > 15 else { return }
+        guard box.width > 20, box.height > 15 else { return }
         
         let text = block.translatedText
         let fontSize = max(CGFloat(translatorState.fontSize), 13)
@@ -263,6 +255,27 @@ class RealTimeOverlayView: NSView {
             .foregroundColor: NSColor.black,
             .paragraphStyle: para
         ]
+        
+        // Use original box width, min 120
+        let wrapWidth = max(box.width, 120)
+        let textBounds = text.boundingRect(
+            with: CGSize(width: wrapWidth - 20, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attrs
+        )
+        
+        // Add extra line height to prevent clipping at certain font sizes
+        let lineHeight = font.ascender - font.descender + font.leading
+        let textW = ceil(textBounds.width) + 2
+        let textH = ceil(textBounds.height) + ceil(lineHeight * 0.3)  // Extra buffer
+        
+        // Rect sized for text, centered on original box center
+        let rectW = textW + 24
+        let rectH = textH + 16
+        let centerX = box.midX
+        let centerY = screenHeight - box.midY
+        
+        let rect = CGRect(x: centerX - rectW/2, y: centerY - rectH/2, width: rectW, height: rectH)
         
         // Shadow
         let shadowPath = NSBezierPath(roundedRect: rect.offsetBy(dx: 1, dy: -1), xRadius: 5, yRadius: 5)
@@ -284,18 +297,12 @@ class RealTimeOverlayView: NSView {
         }
         bgPath.stroke()
         
-        // Text - centered in rect
-        let textBounds = text.boundingRect(
-            with: CGSize(width: rect.width - 8, height: rect.height),
-            options: [.usesLineFragmentOrigin],
-            attributes: attrs
-        )
-        
+        // Text - centered in rect (use ceiled dimensions)
         let textRect = CGRect(
-            x: rect.midX - textBounds.width / 2,
-            y: rect.midY - textBounds.height / 2,
-            width: textBounds.width,
-            height: textBounds.height
+            x: rect.midX - textW / 2,
+            y: rect.midY - textH / 2,
+            width: textW,
+            height: textH
         )
         
         text.draw(in: textRect, withAttributes: attrs)

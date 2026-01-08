@@ -22,12 +22,93 @@ class RealTimeTranslationEngine {
     private var isRunning = false
     private var captureTask: Task<Void, Never>?
     
-    // Thread-safe cache
+    // Thread-safe cache with LRU eviction and fuzzy matching
     private let cacheQueue = DispatchQueue(label: "translation.cache")
     private var _translationCache: [String: String] = [:]
+    private var _cacheOrder: [String] = []  // Track insertion order for LRU
     private var translationCache: [String: String] {
         get { cacheQueue.sync { _translationCache } }
         set { cacheQueue.sync { _translationCache = newValue } }
+    }
+    
+    
+    /// Normalize text for consistent caching (handles OCR variations)
+    private func normalizeForCache(_ text: String) -> String {
+        var normalized = text
+            .lowercased()
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Normalize common OCR mistakes
+        normalized = normalized
+            .replacingOccurrences(of: "histore", with: "histoire")
+            .replacingOccurrences(of: "tkes", with: "très")
+            .replacingOccurrences(of: "untkes", with: "un très")
+            .replacingOccurrences(of: "cour!", with: "coeur!")
+        
+        // Remove extra punctuation spaces
+        normalized = normalized
+            .replacingOccurrences(of: " !", with: "!")
+            .replacingOccurrences(of: " ?", with: "?")
+            .replacingOccurrences(of: " .", with: ".")
+        
+        return normalized
+    }
+    
+    /// Check if text is a watermark (only filter obvious junk, not text fragments)
+    private func isFragment(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Only filter watermarks - let everything else through for grouping
+        if lower.contains("scans.fr") || lower.contains("scan.fr") || lower.contains("cans.fr") {
+            return true
+        }
+        if lower.contains("japscan") || lower.contains("japstan") || lower.contains("jarstan") {
+            return true
+        }
+        
+        return false
+    }
+    
+    private func addToCache(key: String, value: String) {
+        let normalizedKey = normalizeForCache(key)
+        cacheQueue.sync {
+            // If key already exists, just update value
+            if _translationCache[normalizedKey] != nil {
+                _translationCache[normalizedKey] = value
+                return
+            }
+            
+            // Add new entry
+            _translationCache[normalizedKey] = value
+            _cacheOrder.append(normalizedKey)
+            
+            // Evict old entries if over limit
+            let maxSize = translatorState.maxCacheSize
+            while _cacheOrder.count > maxSize {
+                let oldKey = _cacheOrder.removeFirst()
+                _translationCache.removeValue(forKey: oldKey)
+            }
+        }
+    }
+    
+    private func getFromCache(key: String) -> String? {
+        let normalizedKey = normalizeForCache(key)
+        return cacheQueue.sync { _translationCache[normalizedKey] }
+    }
+    
+    /// Clear all cached translations
+    func clearCache() {
+        cacheQueue.sync {
+            _translationCache.removeAll()
+            _cacheOrder.removeAll()
+        }
+        log.info("Translation cache cleared", category: .engine)
+    }
+    
+    /// Get current cache size
+    var cacheSize: Int {
+        cacheQueue.sync { _translationCache.count }
     }
     
     // Change detection
@@ -35,10 +116,8 @@ class RealTimeTranslationEngine {
     private var lastWindowPID: Int32 = 0
     private var lastAppName: String = ""
     
-    // Timing - optimized for speed
-    private let captureInterval: TimeInterval = 0.4
+    // Timing - uses configurable settings from TranslatorState
     private var lastTranslationTime: Date = .distantPast
-    private let translationDelay: TimeInterval = 0.05
     private var isTranslating = false
     
     // Permission tracking
@@ -98,11 +177,6 @@ class RealTimeTranslationEngine {
     private func runCaptureLoop() async {
         while isRunning && !Task.isCancelled {
             do {
-                if isTranslating {
-                    try await Task.sleep(nanoseconds: 100_000_000)
-                    continue
-                }
-                
                 guard let (image, windowBounds, currentPID, appName) = await captureFrontmostWindow() else {
                     try await Task.sleep(nanoseconds: 200_000_000)
                     continue
@@ -121,7 +195,7 @@ class RealTimeTranslationEngine {
                 
                 let currentHash = hashImage(image)
                 if currentHash == lastImageHash {
-                    try await Task.sleep(nanoseconds: UInt64(captureInterval * 1_000_000_000))
+                    try await Task.sleep(nanoseconds: UInt64(translatorState.captureInterval * 1_000_000_000))
                     continue
                 }
                 lastImageHash = currentHash
@@ -133,14 +207,28 @@ class RealTimeTranslationEngine {
                 
                 let groupedObservations = groupObservations(textObservations)
                 
-                isTranslating = true
-                let blocks = await translateGroups(groupedObservations, windowBounds: windowBounds)
-                isTranslating = false
+                // Fast path: if all texts are cached, update positions immediately
+                let (cachedBlocks, uncachedGroups) = separateCachedGroups(groupedObservations, windowBounds: windowBounds)
                 
-                log.blocksCreated(blocks.count)
-                onUpdate(blocks)
+                if !cachedBlocks.isEmpty {
+                    // Update overlay with cached translations immediately
+                    onUpdate(cachedBlocks)
+                }
                 
-                try await Task.sleep(nanoseconds: UInt64(captureInterval * 1_000_000_000))
+                // Slow path: translate new texts (only if not already translating)
+                if !uncachedGroups.isEmpty && !isTranslating {
+                    isTranslating = true
+                    let newBlocks = await translateGroups(uncachedGroups, windowBounds: windowBounds)
+                    isTranslating = false
+                    
+                    if !newBlocks.isEmpty {
+                        log.blocksCreated(newBlocks.count)
+                        // Merge with cached blocks for complete update
+                        onUpdate(cachedBlocks + newBlocks)
+                    }
+                }
+                
+                try await Task.sleep(nanoseconds: UInt64(translatorState.captureInterval * 1_000_000_000))
                 
             } catch {
                 log.error("Capture loop error: \(error.localizedDescription)", category: .engine)
@@ -148,6 +236,54 @@ class RealTimeTranslationEngine {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
+    }
+    
+    /// Separates groups into cached (instant) and uncached (need translation)
+    private func separateCachedGroups(_ groups: [[(String, CGRect)]], windowBounds: CGRect) -> (cached: [TranslatedTextBlock], uncached: [[(String, CGRect)]]) {
+        var cachedBlocks: [TranslatedTextBlock] = []
+        var uncachedGroups: [[(String, CGRect)]] = []
+        let minLen = translatorState.minTextLength
+        
+        for group in groups {
+            let combinedText = group.map { $0.0 }.joined(separator: " ")
+            
+            guard combinedText.count >= minLen else { continue }
+            let letterCount = combinedText.filter { $0.isLetter }.count
+            guard letterCount >= minLen else { continue }
+            
+            // Filter out fragments (partial word detections, watermarks)
+            if isFragment(combinedText) { continue }
+            
+            if translatorState.shouldIgnoreText(combinedText) { continue }
+            if combinedText.contains(".fr/") || combinedText.contains(".com/") { continue }
+            if combinedText.contains("|") { continue }
+            
+            let minX = group.map { $0.1.minX }.min() ?? 0
+            let maxX = group.map { $0.1.maxX }.max() ?? 0
+            let minY = group.map { $0.1.minY }.min() ?? 0
+            let maxY = group.map { $0.1.maxY }.max() ?? 0
+            let groupBox = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+            
+            // Check cache with normalized key
+            if let cachedTranslation = getFromCache(key: combinedText) {
+                let screenRect = CGRect(
+                    x: windowBounds.origin.x + groupBox.origin.x * windowBounds.width,
+                    y: windowBounds.origin.y + (1 - groupBox.origin.y - groupBox.height) * windowBounds.height,
+                    width: groupBox.width * windowBounds.width,
+                    height: groupBox.height * windowBounds.height
+                )
+                cachedBlocks.append(TranslatedTextBlock(
+                    originalText: combinedText,
+                    translatedText: cachedTranslation,
+                    boundingBox: screenRect,
+                    confidence: 1.0
+                ))
+            } else {
+                uncachedGroups.append(group)
+            }
+        }
+        
+        return (cachedBlocks, uncachedGroups)
     }
     
     private func captureFrontmostWindow() async -> (NSImage, CGRect, Int32, String)? {
@@ -263,6 +399,9 @@ class RealTimeTranslationEngine {
             throw NSError(domain: "OCR", code: 1)
         }
         
+        let useAccurate = translatorState.ocrAccurate
+        let sourceLang = sourceLanguage
+        
         return try await withCheckedThrowingContinuation { continuation in
             let request = VNRecognizeTextRequest { request, error in
                 if let error = error {
@@ -272,9 +411,14 @@ class RealTimeTranslationEngine {
                 continuation.resume(returning: request.results as? [VNRecognizedTextObservation] ?? [])
             }
             
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.recognitionLanguages = ["fr-FR", "en-US"]
+            request.recognitionLevel = useAccurate ? .accurate : .fast
+            request.usesLanguageCorrection = useAccurate
+            // Build recognition languages based on source language
+            var languages = ["\(sourceLang)-\(sourceLang.uppercased())", "en-US"]
+            if sourceLang != "en" && sourceLang != "auto" {
+                languages.append("en-US")
+            }
+            request.recognitionLanguages = languages
             
             do {
                 try VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
@@ -285,8 +429,9 @@ class RealTimeTranslationEngine {
     }
     
     private func groupObservations(_ observations: [VNRecognizedTextObservation]) -> [[(String, CGRect)]] {
-        var groups: [[(String, CGRect, VNRecognizedTextObservation)]] = []
+        var validObservations: [(String, CGRect, VNRecognizedTextObservation)] = []
         
+        // First pass: filter observations
         for observation in observations {
             guard let candidate = observation.topCandidates(1).first else { continue }
             let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -319,31 +464,34 @@ class RealTimeTranslationEngine {
             }
             
             log.textAccepted(text)
+            validObservations.append((text, observation.boundingBox, observation))
+        }
+        
+        // Second pass: group using improved algorithm
+        var groups: [[(String, CGRect, VNRecognizedTextObservation)]] = []
+        var used = Set<Int>()
+        
+        // Sort by Y position (top to bottom in normalized coords means high to low)
+        let sorted = validObservations.enumerated().sorted { $0.element.1.midY > $1.element.1.midY }
+        
+        for (idx, (text, box, obs)) in sorted {
+            if used.contains(idx) { continue }
             
-            let box = observation.boundingBox
+            var group: [(String, CGRect, VNRecognizedTextObservation)] = [(text, box, obs)]
+            used.insert(idx)
             
-            var addedToGroup = false
-            for i in 0..<groups.count {
-                for (_, existingBox, _) in groups[i] {
-                    let verticalGap = abs(box.minY - existingBox.maxY)
-                    let verticalGap2 = abs(existingBox.minY - box.maxY)
-                    let minVerticalGap = min(verticalGap, verticalGap2)
-                    
-                    let horizontalOverlap = max(0, min(box.maxX, existingBox.maxX) - max(box.minX, existingBox.minX))
-                    let minWidth = min(box.width, existingBox.width)
-                    
-                    if minVerticalGap < 0.05 && horizontalOverlap > minWidth * 0.3 {
-                        groups[i].append((text, box, observation))
-                        addedToGroup = true
-                        break
-                    }
+            // Find all observations that should be grouped with this one
+            for (otherIdx, (otherText, otherBox, otherObs)) in sorted {
+                if used.contains(otherIdx) { continue }
+                
+                // Check if this observation belongs to the same text block
+                if shouldGroup(box1: box, box2: otherBox, existingGroup: group) {
+                    group.append((otherText, otherBox, otherObs))
+                    used.insert(otherIdx)
                 }
-                if addedToGroup { break }
             }
             
-            if !addedToGroup {
-                groups.append([(text, box, observation)])
-            }
+            groups.append(group)
         }
         
         return groups.map { group in
@@ -352,16 +500,50 @@ class RealTimeTranslationEngine {
         }
     }
     
+    /// Simple grouping: only merge text on same horizontal line or directly adjacent vertically with center alignment
+    private func shouldGroup(box1: CGRect, box2: CGRect, existingGroup: [(String, CGRect, VNRecognizedTextObservation)]) -> Bool {
+        let groupingFactor = translatorState.textGrouping
+        
+        let groupMinX = existingGroup.map { $0.1.minX }.min() ?? box1.minX
+        let groupMaxX = existingGroup.map { $0.1.maxX }.max() ?? box1.maxX
+        let groupMinY = existingGroup.map { $0.1.minY }.min() ?? box1.minY
+        let groupMaxY = existingGroup.map { $0.1.maxY }.max() ?? box1.maxY
+        let groupCenterX = (groupMinX + groupMaxX) / 2
+        
+        // Max size limit
+        let potentialWidth = max(groupMaxX, box2.maxX) - min(groupMinX, box2.minX)
+        let potentialHeight = max(groupMaxY, box2.maxY) - min(groupMinY, box2.minY)
+        if potentialWidth > 0.30 || potentialHeight > 0.35 { return false }
+        
+        // Horizontal gap = different bubbles
+        let hGap = max(0, max(box2.minX - groupMaxX, groupMinX - box2.maxX))
+        if hGap > 0.03 { return false }
+        
+        // Vertical gap between boxes
+        let vGap = max(0, max(box2.minY - groupMaxY, groupMinY - box2.maxY))
+        let avgH = (box1.height + box2.height) / 2
+        
+        // Only group if vertically close AND horizontally aligned (centers within 5%)
+        let centerDist = abs(box2.midX - groupCenterX)
+        let aligned = centerDist < 0.05 * groupingFactor
+        
+        return vGap < avgH * 2.5 * groupingFactor && aligned
+    }
+    
     private func translateGroups(_ groups: [[(String, CGRect)]], windowBounds: CGRect) async -> [TranslatedTextBlock] {
         // Prepare valid groups first
         var validGroups: [(text: String, box: CGRect)] = []
+        let minLen = translatorState.minTextLength
         
         for group in groups {
             let combinedText = group.map { $0.0 }.joined(separator: " ")
             
-            guard combinedText.count >= 3 else { continue }
+            guard combinedText.count >= minLen else { continue }
             let letterCount = combinedText.filter { $0.isLetter }.count
-            guard letterCount >= 3 else { continue }
+            guard letterCount >= minLen else { continue }
+            
+            // Filter out fragments
+            if isFragment(combinedText) { continue }
             
             if translatorState.shouldIgnoreText(combinedText) { continue }
             if combinedText.contains(".fr/") || combinedText.contains(".com/") { continue }
@@ -383,7 +565,7 @@ class RealTimeTranslationEngine {
             for (text, groupBox) in validGroups {
                 taskGroup.addTask { [self] in
                     let translation: String
-                    let cachedValue = cacheQueue.sync { _translationCache[text] }
+                    let cachedValue = getFromCache(key: text)
                     
                     if let cached = cachedValue {
                         log.cacheHit(text)
@@ -400,12 +582,15 @@ class RealTimeTranslationEngine {
                                 from: sourceLanguage,
                                 to: targetLanguage,
                                 useAppleTranslation: translatorState.useAppleTranslation,
+                                useLibreTranslate: translatorState.useLibreTranslate,
+                                libreTranslateUrl: translatorState.libreTranslateUrl.isEmpty ? nil : translatorState.libreTranslateUrl,
+                                libreTranslateApiKey: translatorState.libreTranslateApiKey.isEmpty ? nil : translatorState.libreTranslateApiKey,
                                 customApiUrl: translatorState.customApiUrl.isEmpty ? nil : translatorState.customApiUrl
                             )
                             let duration = Date().timeIntervalSince(startTime)
                             translation = result.text
-                            log.translationCompleted(text, translation, cached: false, usedAppleTranslation: result.usedAppleTranslation, duration: duration)
-                            cacheQueue.sync { _translationCache[text] = translation }
+                            log.translationCompleted(text, translation, cached: false, usedAppleTranslation: result.usedAppleTranslation, usedLibreTranslate: result.usedLibreTranslate, duration: duration)
+                            self.addToCache(key: text, value: translation)
                         } catch {
                             log.translationFailed(text, error: error)
                             return nil

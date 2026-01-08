@@ -23,12 +23,20 @@ enum TranslationError: Error, LocalizedError {
 struct TranslationResult {
     let text: String
     let usedAppleTranslation: Bool
+    let usedLibreTranslate: Bool
+    
+    init(text: String, usedAppleTranslation: Bool, usedLibreTranslate: Bool = false) {
+        self.text = text
+        self.usedAppleTranslation = usedAppleTranslation
+        self.usedLibreTranslate = usedLibreTranslate
+    }
 }
 
 actor TranslationService {
     
-    // Default API URL
+    // Default API URLs
     static let defaultApiUrl = "https://translate.googleapis.com/translate_a/single"
+    static let defaultLibreTranslateUrl = "http://localhost:5000/translate"
     
     // Check if Apple Translation is available (requires macOS 26+)
     static var isAppleTranslationAvailable: Bool {
@@ -46,10 +54,21 @@ actor TranslationService {
         from sourceLang: String,
         to targetLang: String,
         useAppleTranslation: Bool = true,
+        useLibreTranslate: Bool = false,
+        libreTranslateUrl: String? = nil,
+        libreTranslateApiKey: String? = nil,
         customApiUrl: String? = nil
     ) async throws -> TranslationResult {
         
-        // If user wants Apple Translation
+        // Priority 1: LibreTranslate / LTEngine (self-hosted)
+        if useLibreTranslate {
+            let url = libreTranslateUrl?.isEmpty == false ? libreTranslateUrl! : defaultLibreTranslateUrl
+            let apiKey = libreTranslateApiKey?.isEmpty == false ? libreTranslateApiKey : nil
+            let result = try await translateWithLibreTranslate(text: text, from: sourceLang, to: targetLang, apiUrl: url, apiKey: apiKey)
+            return TranslationResult(text: result, usedAppleTranslation: false, usedLibreTranslate: true)
+        }
+        
+        // Priority 2: Apple Translation
         if useAppleTranslation {
             if #available(macOS 26.0, *) {
                 // macOS 26+ - use Apple Translation (NO API)
@@ -66,12 +85,12 @@ actor TranslationService {
                 let result = try await translateWithApi(text: text, from: sourceLang, to: targetLang, apiUrl: apiUrl)
                 return TranslationResult(text: result, usedAppleTranslation: false)
             }
-        } else {
-            // User explicitly chose API
-            let apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
-            let result = try await translateWithApi(text: text, from: sourceLang, to: targetLang, apiUrl: apiUrl)
-            return TranslationResult(text: result, usedAppleTranslation: false)
         }
+        
+        // Priority 3: Google Translate API (fallback)
+        let apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
+        let result = try await translateWithApi(text: text, from: sourceLang, to: targetLang, apiUrl: apiUrl)
+        return TranslationResult(text: result, usedAppleTranslation: false)
     }
     
     // MARK: - Apple Translation Framework (macOS 26+)
@@ -110,6 +129,74 @@ actor TranslationService {
         
         if translatedText.isEmpty {
             throw TranslationError.translationFailed("Empty response from Apple Translation")
+        }
+        
+        return translatedText
+    }
+    
+    // MARK: - LibreTranslate / LTEngine API
+    
+    private static func translateWithLibreTranslate(text: String, from sourceLang: String, to targetLang: String, apiUrl: String, apiKey: String?) async throws -> String {
+        // Clean up language codes
+        let source = sourceLang.components(separatedBy: "-").first ?? sourceLang
+        let target = targetLang.components(separatedBy: "-").first ?? targetLang
+        
+        // Ensure URL ends with /translate
+        var finalUrl = apiUrl
+        if !finalUrl.hasSuffix("/translate") {
+            finalUrl = finalUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/translate"
+        }
+        
+        guard let url = URL(string: finalUrl) else {
+            throw TranslationError.invalidResponse
+        }
+        
+        // Build JSON body
+        var body: [String: Any] = [
+            "q": text,
+            "source": source,
+            "target": target,
+            "format": "text"
+        ]
+        
+        // Add API key if provided
+        if let key = apiKey, !key.isEmpty {
+            body["api_key"] = key
+        }
+        
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
+            throw TranslationError.invalidResponse
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = jsonData
+        request.timeoutInterval = 30  // LLM-based translation may take longer
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TranslationError.networkError("Invalid response")
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            // Try to parse error message
+            if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorMessage = errorJson["error"] as? String {
+                throw TranslationError.translationFailed(errorMessage)
+            }
+            // Provide helpful error for common issues
+            if httpResponse.statusCode == 405 {
+                throw TranslationError.networkError("HTTP 405 - Check LTEngine URL (should end with /translate)")
+            }
+            throw TranslationError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        // Parse LibreTranslate response: {"translatedText": "..."}
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let translatedText = json["translatedText"] as? String else {
+            throw TranslationError.invalidResponse
         }
         
         return translatedText

@@ -76,6 +76,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return event
         }
         
+        // Listen for clear cache notification from settings
+        NotificationCenter.default.addObserver(
+            forName: TranslatorState.clearCacheNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.clearTranslationCache()
+        }
+        
         print("Overlay Translator started! Press Cmd+Ctrl+T to toggle.")
     }
     
@@ -161,6 +170,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     
     func unhideAllOverlays() {
         overlayView?.unhideAll()
+    }
+    
+    func clearTranslationCache() {
+        translationEngine?.clearCache()
+    }
+    
+    var cacheSize: Int {
+        translationEngine?.cacheSize ?? 0
     }
     
     func restartTranslationEngine() {
