@@ -39,9 +39,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var isTranslating = false
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Request accessibility permissions
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        AXIsProcessTrustedWithOptions(options as CFDictionary)
+        // Log permission status (don't auto-prompt - user can grant manually)
+        let accessibilityGranted = AXIsProcessTrusted()
+        let screenCaptureGranted = CGPreflightScreenCaptureAccess()
+        
+        print("Permissions - Accessibility: \(accessibilityGranted), Screen Recording: \(screenCaptureGranted)")
+        
+        if !screenCaptureGranted {
+            print("Screen Recording permission required. Please grant in System Settings > Privacy & Security > Screen Recording")
+        }
         
         // Register global hotkey for toggle (Cmd+Control+T)
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -61,7 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return event
         }
         
-        print("🌍 Overlay Translator started! Press ⌘⌃T to toggle.")
+        print("Overlay Translator started! Press Cmd+Ctrl+T to toggle.")
     }
     
     func toggleTranslation() {

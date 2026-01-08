@@ -68,6 +68,24 @@ if [ -f "generate-icon.swift" ]; then
     rm -f AppIcon.icns AppIcon.png
 fi
 
+# Code signing (optional - requires Apple Developer ID)
+# Replace with your Developer ID, or comment out if you don't have one
+DEVELOPER_ID=""  # e.g., "Developer ID Application: Your Name (TEAMID)"
+
+if [ -n "$DEVELOPER_ID" ]; then
+    echo "🔐 Signing app with Developer ID..."
+    codesign --force --deep --options runtime \
+        --sign "$DEVELOPER_ID" \
+        --entitlements OverlayTranslator.entitlements \
+        "$APP_BUNDLE"
+    
+    # Verify signature
+    codesign --verify --verbose "$APP_BUNDLE" && echo "   ✓ Signature verified"
+else
+    echo "⚠️  App is unsigned (ad-hoc signing for local use)"
+    codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
+fi
+
 echo ""
 echo "✅ App bundle created: $APP_BUNDLE"
 echo ""

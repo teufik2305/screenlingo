@@ -2,28 +2,8 @@ import Foundation
 import AppKit
 import Vision
 import CryptoKit
-import os.log
-
-let logger = Logger(subsystem: "com.overlay.translator", category: "engine")
-
-// Global log function that uses TranslatorState's log path
-var globalLogPath = "/tmp/overlay_translator.log"
-
-func logToFile(_ message: String) {
-    let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-    let line = "[\(timestamp)] \(message)\n"
-    if let data = line.data(using: .utf8) {
-        if FileManager.default.fileExists(atPath: globalLogPath) {
-            if let handle = FileHandle(forWritingAtPath: globalLogPath) {
-                handle.seekToEndOfFile()
-                handle.write(data)
-                handle.closeFile()
-            }
-        } else {
-            try? data.write(to: URL(fileURLWithPath: globalLogPath))
-        }
-    }
-}
+import ScreenCaptureKit
+import CoreGraphics
 
 struct TranslatedTextBlock {
     let originalText: String
@@ -52,13 +32,20 @@ class RealTimeTranslationEngine {
     
     // Change detection
     private var lastImageHash: String = ""
-    private var lastWindowPID: Int32 = 0  // Track window changes
+    private var lastWindowPID: Int32 = 0
+    private var lastAppName: String = ""
     
     // Timing - optimized for speed
-    private let captureInterval: TimeInterval = 0.4  // Was 0.8
+    private let captureInterval: TimeInterval = 0.4
     private var lastTranslationTime: Date = .distantPast
-    private let translationDelay: TimeInterval = 0.05  // Was 0.2
+    private let translationDelay: TimeInterval = 0.05
     private var isTranslating = false
+    
+    // Permission tracking
+    private var hasLoggedPermissionError = false
+    
+    // Track if currently in excluded app to clear overlay when switching to it
+    private var isInExcludedApp = false
     
     init(sourceLanguage: String, targetLanguage: String, translatorState: TranslatorState, onUpdate: @escaping ([TranslatedTextBlock]) -> Void, onClear: @escaping () -> Void = {}) {
         self.sourceLanguage = sourceLanguage
@@ -67,14 +54,24 @@ class RealTimeTranslationEngine {
         self.onUpdate = onUpdate
         self.onClear = onClear
         
-        // Set global log path from settings
-        globalLogPath = translatorState.logFilePath
+        // Configure logger
+        log.configure(
+            logFilePath: translatorState.logFilePath, 
+            minLevel: translatorState.logLevel,
+            enableFileLogging: translatorState.enableFileLogging
+        )
     }
     
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        logToFile("▶️ Translation engine started")
+        
+        log.engineStarted()
+        log.info("Source: \(sourceLanguage) -> Target: \(targetLanguage)", category: .engine)
+        log.info("Apple Translation: \(translatorState.useAppleTranslation ? "enabled" : "disabled")", category: .engine)
+        if !translatorState.customApiUrl.isEmpty {
+            log.info("Custom API: \(translatorState.customApiUrl)", category: .engine)
+        }
         
         captureTask = Task { [weak self] in
             await self?.runCaptureLoop()
@@ -85,31 +82,32 @@ class RealTimeTranslationEngine {
         isRunning = false
         captureTask?.cancel()
         captureTask = nil
-        logToFile("⏹️ Translation engine stopped")
+        log.engineStopped()
     }
     
     private func runCaptureLoop() async {
         while isRunning && !Task.isCancelled {
             do {
                 if isTranslating {
-                    try await Task.sleep(nanoseconds: 100_000_000)  // 100ms instead of 300ms
+                    try await Task.sleep(nanoseconds: 100_000_000)
                     continue
                 }
                 
-                guard let (image, windowBounds, currentPID) = captureFrontmostWindow() else {
-                    try await Task.sleep(nanoseconds: 200_000_000)  // 200ms instead of 500ms
+                guard let (image, windowBounds, currentPID, appName) = await captureFrontmostWindow() else {
+                    try await Task.sleep(nanoseconds: 200_000_000)
                     continue
                 }
                 
                 // Clear translations if window changed
                 if currentPID != lastWindowPID && lastWindowPID != 0 {
-                    logToFile("🔄 Window changed - clearing translations")
+                    log.windowChanged(from: lastAppName, to: appName)
                     lastImageHash = ""
                     onClear()
                 }
                 lastWindowPID = currentPID
+                lastAppName = appName
                 
-                logToFile("📸 Captured window: \(Int(windowBounds.width))x\(Int(windowBounds.height))")
+                log.windowCaptured(app: appName, size: windowBounds.size)
                 
                 let currentHash = hashImage(image)
                 if currentHash == lastImageHash {
@@ -118,8 +116,10 @@ class RealTimeTranslationEngine {
                 }
                 lastImageHash = currentHash
                 
+                let ocrStart = Date()
                 let textObservations = try await performOCR(on: image)
-                logToFile("📝 OCR found \(textObservations.count) text regions")
+                let ocrDuration = Date().timeIntervalSince(ocrStart)
+                log.ocrCompleted(regions: textObservations.count, duration: ocrDuration)
                 
                 let groupedObservations = groupObservations(textObservations)
                 
@@ -127,55 +127,95 @@ class RealTimeTranslationEngine {
                 let blocks = await translateGroups(groupedObservations, windowBounds: windowBounds)
                 isTranslating = false
                 
-                logToFile("📊 Created \(blocks.count) translation blocks")
+                log.blocksCreated(blocks.count)
                 onUpdate(blocks)
                 
                 try await Task.sleep(nanoseconds: UInt64(captureInterval * 1_000_000_000))
                 
             } catch {
-                logToFile("❌ Error: \(error.localizedDescription)")
+                log.error("Capture loop error: \(error.localizedDescription)", category: .engine)
                 isTranslating = false
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
     }
     
-    private func captureFrontmostWindow() -> (NSImage, CGRect, Int32)? {
+    private func captureFrontmostWindow() async -> (NSImage, CGRect, Int32, String)? {
         guard let frontApp = NSWorkspace.shared.frontmostApplication,
               frontApp.bundleIdentifier != Bundle.main.bundleIdentifier else {
             return nil
         }
         
-        let pid = frontApp.processIdentifier
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+        let appName = frontApp.localizedName ?? frontApp.bundleIdentifier ?? "Unknown"
+        
+        // Check if app is excluded
+        if translatorState.isAppExcluded(frontApp.bundleIdentifier) {
+            // If we just switched to an excluded app, clear the overlay
+            if !isInExcludedApp {
+                isInExcludedApp = true
+                log.appExcluded(frontApp.bundleIdentifier ?? "unknown")
+                
+                // Clear overlay on main thread
+                await MainActor.run {
+                    onClear()
+                }
+            }
             return nil
         }
         
-        for window in windowList {
-            guard let ownerPID = window[kCGWindowOwnerPID as String] as? Int32,
-                  ownerPID == pid,
-                  let windowID = window[kCGWindowNumber as String] as? CGWindowID,
-                  let boundsDict = window[kCGWindowBounds as String] as? [String: CGFloat],
-                  let layer = window[kCGWindowLayer as String] as? Int,
-                  layer == 0 else { continue }
-            
-            let bounds = CGRect(
-                x: boundsDict["X"] ?? 0,
-                y: boundsDict["Y"] ?? 0,
-                width: boundsDict["Width"] ?? 0,
-                height: boundsDict["Height"] ?? 0
-            )
-            
-            guard bounds.width > 300, bounds.height > 300 else { continue }
-            
-            guard let cgImage = CGWindowListCreateImage(
-                bounds, .optionIncludingWindow, windowID, [.boundsIgnoreFraming]
-            ) else { continue }
-            
-            return (NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height)), bounds, pid)
+        // We're in a non-excluded app - if we just returned from excluded, force re-translate
+        if isInExcludedApp {
+            isInExcludedApp = false
+            lastImageHash = ""  // Reset hash to force translation
+            log.info("Returned from excluded app, forcing re-translation", category: .engine)
         }
-        return nil
+        
+        let pid = frontApp.processIdentifier
+        
+        // Use ScreenCaptureKit for window capture
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            
+            // Find the frontmost window for this app
+            guard let window = content.windows.first(where: { scWindow in
+                scWindow.owningApplication?.processID == pid && 
+                scWindow.isOnScreen &&
+                scWindow.frame.width > 300 && 
+                scWindow.frame.height > 300
+            }) else {
+                return nil
+            }
+            
+            let bounds = window.frame
+            
+            // Configure capture
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let config = SCStreamConfiguration()
+            config.width = Int(bounds.width) * 2  // Retina
+            config.height = Int(bounds.height) * 2
+            config.scalesToFit = true
+            config.showsCursor = false
+            
+            // Capture screenshot
+            let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            
+            let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            
+            return (nsImage, bounds, pid, appName)
+            
+        } catch {
+            // Only log permission errors once to avoid spam
+            let errorMessage = error.localizedDescription
+            if errorMessage.contains("TCC") || errorMessage.contains("declined") {
+                if !hasLoggedPermissionError {
+                    hasLoggedPermissionError = true
+                    log.warning("Screen Recording permission not granted. Please enable in System Settings > Privacy & Security > Screen Recording, then RESTART the app.", category: .engine)
+                }
+            } else {
+                log.debug("ScreenCaptureKit error: \(errorMessage)", category: .engine)
+            }
+            return nil
+        }
     }
     
     private func hashImage(_ image: NSImage) -> String {
@@ -233,19 +273,34 @@ class RealTimeTranslationEngine {
             guard let candidate = observation.topCandidates(1).first else { continue }
             let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
             
-            guard text.count >= 2 else { continue }
-            if text.contains(".fr/") || text.contains(".com/") || text.contains("http") { continue }
-            if text.contains("|") || text.contains("O|") { continue }
+            // Filter criteria
+            guard text.count >= 2 else { 
+                log.textIgnored(text, reason: "too short")
+                continue 
+            }
+            
+            if text.contains(".fr/") || text.contains(".com/") || text.contains("http") { 
+                log.textIgnored(text, reason: "URL")
+                continue 
+            }
+            
+            if text.contains("|") || text.contains("O|") { 
+                log.textIgnored(text, reason: "special chars")
+                continue 
+            }
             
             if translatorState.shouldIgnoreText(text) {
-                logToFile("   ⛔ Ignored: '\(text)'")
+                log.textIgnored(text, reason: "pattern match")
                 continue
             }
             
             let letterCount = text.filter { $0.isLetter }.count
-            guard letterCount >= 2 else { continue }
+            guard letterCount >= 2 else { 
+                log.textIgnored(text, reason: "few letters")
+                continue 
+            }
             
-            logToFile("   ✓ Valid text: '\(text)'")
+            log.textAccepted(text)
             
             let box = observation.boundingBox
             
@@ -303,7 +358,7 @@ class RealTimeTranslationEngine {
             validGroups.append((combinedText, groupBox))
         }
         
-        // Translate in parallel (up to 5 concurrent)
+        // Translate in parallel
         return await withTaskGroup(of: TranslatedTextBlock?.self) { taskGroup in
             var blocks: [TranslatedTextBlock] = []
             
@@ -313,19 +368,28 @@ class RealTimeTranslationEngine {
                     let cachedValue = cacheQueue.sync { _translationCache[text] }
                     
                     if let cached = cachedValue {
+                        log.cacheHit(text)
+                        log.translationCompleted(text, cached, cached: true, usedAppleTranslation: false, duration: 0)
                         translation = cached
                     } else {
-                        logToFile("🌐 Translating: '\(text.prefix(40))...'")
+                        log.cacheMiss(text)
+                        log.translationStarted(text)
+                        
+                        let startTime = Date()
                         do {
-                            translation = try await TranslationService.translate(
+                            let result = try await TranslationService.translate(
                                 text: text,
                                 from: sourceLanguage,
-                                to: targetLanguage
+                                to: targetLanguage,
+                                useAppleTranslation: translatorState.useAppleTranslation,
+                                customApiUrl: translatorState.customApiUrl.isEmpty ? nil : translatorState.customApiUrl
                             )
-                            logToFile("✅ Got: '\(translation.prefix(40))...'")
+                            let duration = Date().timeIntervalSince(startTime)
+                            translation = result.text
+                            log.translationCompleted(text, translation, cached: false, usedAppleTranslation: result.usedAppleTranslation, duration: duration)
                             cacheQueue.sync { _translationCache[text] = translation }
                         } catch {
-                            logToFile("❌ Failed: \(error.localizedDescription)")
+                            log.translationFailed(text, error: error)
                             return nil
                         }
                     }
