@@ -100,9 +100,13 @@ echo "   • Accessibility (keyboard shortcuts)"
 echo "   • Screen Recording (window capture)"
 echo ""
 
-# Optionally open the app
-read -p "Open app now? (y/n) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+# Open app if --open flag passed or interactive prompt
+if [[ "$1" == "--open" ]] || [[ "$1" == "-o" ]]; then
     open "$APP_BUNDLE"
+elif [[ -t 0 ]]; then
+    read -p "Open app now? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        open "$APP_BUNDLE"
+    fi
 fi

@@ -37,16 +37,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var settingsWindowController: SettingsWindowController?
     
     @Published var isTranslating = false
+    @Published var hiddenOverlays: [(original: String, translated: String)] = []
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Log permission status (don't auto-prompt - user can grant manually)
-        let accessibilityGranted = AXIsProcessTrusted()
+        // Check and request screen recording permission on startup
         let screenCaptureGranted = CGPreflightScreenCaptureAccess()
         
-        print("Permissions - Accessibility: \(accessibilityGranted), Screen Recording: \(screenCaptureGranted)")
-        
         if !screenCaptureGranted {
-            print("Screen Recording permission required. Please grant in System Settings > Privacy & Security > Screen Recording")
+            print("[Permission] Requesting Screen Recording permission...")
+            print("             Grant permission in the system dialog, then RESTART the app")
+            // This shows the system dialog or opens System Settings
+            // Don't show our custom alert here - let the engine detect if capture actually fails
+            CGRequestScreenCaptureAccess()
+        } else {
+            print("[Permission] Screen Recording OK")
+        }
+        
+        // Check accessibility (for global hotkeys)
+        if !AXIsProcessTrusted() {
+            print("[Permission] Accessibility recommended for global hotkey (Cmd+Ctrl+T)")
         }
         
         // Register global hotkey for toggle (Cmd+Control+T)
@@ -104,6 +113,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             onIgnoreText: { [weak self] text in
                 self?.translatorState.addIgnoredPattern(text)
                 self?.restartTranslationEngine()
+            },
+            onHiddenChanged: { [weak self] hiddenList in
+                self?.hiddenOverlays = hiddenList
             }
         )
         window.contentView = overlayView
@@ -125,6 +137,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 DispatchQueue.main.async {
                     self?.overlayView?.clearBlocks()
                 }
+            },
+            onPermissionError: { [weak self] in
+                self?.showPermissionAlert()
             }
         )
         translationEngine?.start()
@@ -137,12 +152,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         overlayWindow?.orderOut(nil)
         overlayWindow = nil
         overlayView = nil
+        hiddenOverlays = []
+    }
+    
+    func unhideOverlay(_ originalText: String) {
+        overlayView?.unhideBlock(originalText)
+    }
+    
+    func unhideAllOverlays() {
+        overlayView?.unhideAll()
     }
     
     func restartTranslationEngine() {
         guard isTranslating else { return }
         stopTranslation()
         startTranslation()
+    }
+    
+    private func showPermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Screen Recording Permission Required"
+        alert.informativeText = """
+        ScreenLingo needs Screen Recording permission to capture and translate text.
+        
+        If you see a system dialog, click "Open System Settings" and enable ScreenLingo.
+        
+        If no dialog appeared (app was rebuilt):
+        1. Open System Settings → Privacy & Security → Screen Recording
+        2. Remove ScreenLingo from the list (click -)
+        3. Quit and restart this app
+        4. Grant permission when prompted
+        
+        Note: With a signed release build, you won't need to do this after updates.
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Later")
+        
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            // Open Screen Recording settings directly
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        
+        NSApp.setActivationPolicy(.accessory)
     }
     
     func openSettings() {

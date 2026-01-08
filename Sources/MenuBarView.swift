@@ -81,6 +81,38 @@ struct MenuBarView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             
+            // Hidden overlays section - only show when translating and has hidden items
+            if appDelegate.isTranslating && !appDelegate.hiddenOverlays.isEmpty {
+                Divider()
+                
+                Menu {
+                    ForEach(appDelegate.hiddenOverlays.indices, id: \.self) { index in
+                        let item = appDelegate.hiddenOverlays[index]
+                        Button(action: { appDelegate.unhideOverlay(item.original) }) {
+                            let preview = item.translated.count > 30 
+                                ? String(item.translated.prefix(30)) + "..." 
+                                : item.translated
+                            Text(preview)
+                        }
+                    }
+                    
+                    Divider()
+                    
+                    Button(action: { appDelegate.unhideAllOverlays() }) {
+                        Text("Unhide All")
+                    }
+                } label: {
+                    HStack {
+                        Text("Hidden (\(appDelegate.hiddenOverlays.count))")
+                        Spacer()
+                        Image(systemName: "eye.slash")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            }
+            
             Divider()
             
             // Settings

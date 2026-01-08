@@ -2,7 +2,6 @@ import Foundation
 import AppKit
 import Vision
 import CryptoKit
-import ScreenCaptureKit
 import CoreGraphics
 
 struct TranslatedTextBlock {
@@ -18,6 +17,7 @@ class RealTimeTranslationEngine {
     private let translatorState: TranslatorState
     private let onUpdate: ([TranslatedTextBlock]) -> Void
     private let onClear: () -> Void
+    private let onPermissionError: (() -> Void)?
     
     private var isRunning = false
     private var captureTask: Task<Void, Never>?
@@ -43,16 +43,18 @@ class RealTimeTranslationEngine {
     
     // Permission tracking
     private var hasLoggedPermissionError = false
+    private var hasNotifiedPermissionError = false
     
     // Track if currently in excluded app to clear overlay when switching to it
     private var isInExcludedApp = false
     
-    init(sourceLanguage: String, targetLanguage: String, translatorState: TranslatorState, onUpdate: @escaping ([TranslatedTextBlock]) -> Void, onClear: @escaping () -> Void = {}) {
+    init(sourceLanguage: String, targetLanguage: String, translatorState: TranslatorState, onUpdate: @escaping ([TranslatedTextBlock]) -> Void, onClear: @escaping () -> Void = {}, onPermissionError: (() -> Void)? = nil) {
         self.sourceLanguage = sourceLanguage
         self.targetLanguage = targetLanguage
         self.translatorState = translatorState
         self.onUpdate = onUpdate
         self.onClear = onClear
+        self.onPermissionError = onPermissionError
         
         // Configure logger
         log.configure(
@@ -83,6 +85,14 @@ class RealTimeTranslationEngine {
         captureTask?.cancel()
         captureTask = nil
         log.engineStopped()
+    }
+    
+    private func notifyPermissionError() {
+        guard !hasNotifiedPermissionError else { return }
+        hasNotifiedPermissionError = true
+        DispatchQueue.main.async { [weak self] in
+            self?.onPermissionError?()
+        }
     }
     
     private func runCaptureLoop() async {
@@ -150,72 +160,80 @@ class RealTimeTranslationEngine {
         
         // Check if app is excluded
         if translatorState.isAppExcluded(frontApp.bundleIdentifier) {
-            // If we just switched to an excluded app, clear the overlay
             if !isInExcludedApp {
                 isInExcludedApp = true
                 log.appExcluded(frontApp.bundleIdentifier ?? "unknown")
-                
-                // Clear overlay on main thread
-                await MainActor.run {
-                    onClear()
-                }
+                await MainActor.run { onClear() }
             }
             return nil
         }
         
-        // We're in a non-excluded app - if we just returned from excluded, force re-translate
         if isInExcludedApp {
             isInExcludedApp = false
-            lastImageHash = ""  // Reset hash to force translation
+            lastImageHash = ""
             log.info("Returned from excluded app, forcing re-translation", category: .engine)
         }
         
         let pid = frontApp.processIdentifier
         
-        // Use ScreenCaptureKit for window capture
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            
-            // Find the frontmost window for this app
-            guard let window = content.windows.first(where: { scWindow in
-                scWindow.owningApplication?.processID == pid && 
-                scWindow.isOnScreen &&
-                scWindow.frame.width > 300 && 
-                scWindow.frame.height > 300
-            }) else {
-                return nil
-            }
-            
-            let bounds = window.frame
-            
-            // Configure capture
-            let filter = SCContentFilter(desktopIndependentWindow: window)
-            let config = SCStreamConfiguration()
-            config.width = Int(bounds.width) * 2  // Retina
-            config.height = Int(bounds.height) * 2
-            config.scalesToFit = true
-            config.showsCursor = false
-            
-            // Capture screenshot
-            let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            
-            let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-            
-            return (nsImage, bounds, pid, appName)
-            
-        } catch {
-            // Only log permission errors once to avoid spam
-            let errorMessage = error.localizedDescription
-            if errorMessage.contains("TCC") || errorMessage.contains("declined") {
-                if !hasLoggedPermissionError {
-                    hasLoggedPermissionError = true
-                    log.warning("Screen Recording permission not granted. Please enable in System Settings > Privacy & Security > Screen Recording, then RESTART the app.", category: .engine)
-                }
-            } else {
-                log.debug("ScreenCaptureKit error: \(errorMessage)", category: .engine)
+        // Check screen recording permission
+        if !CGPreflightScreenCaptureAccess() {
+            CGRequestScreenCaptureAccess()
+            if !hasLoggedPermissionError {
+                hasLoggedPermissionError = true
+                log.warning("Screen Recording permission required.", category: .engine)
+                notifyPermissionError()
             }
             return nil
         }
+        
+        // Use CGWindowList for both bounds and image capture
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            // This can happen if:
+            // 1. Permission was just granted (needs restart)
+            // 2. App was rebuilt and old permission entry is stale
+            if !hasLoggedPermissionError {
+                hasLoggedPermissionError = true
+                log.warning("Screen capture failed - permission may be stale after rebuild", category: .engine)
+                notifyPermissionError()
+            }
+            return nil
+        }
+        
+        // Extra check: if windowList is empty, permission might be broken
+        if windowList.isEmpty && !hasLoggedPermissionError {
+            hasLoggedPermissionError = true
+            log.warning("No windows found - permission may be stale after rebuild", category: .engine)
+            notifyPermissionError()
+            return nil
+        }
+        
+        for window in windowList {
+            guard let ownerPID = window[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID == pid,
+                  let windowID = window[kCGWindowNumber as String] as? CGWindowID,
+                  let boundsDict = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == 0 else { continue }
+            
+            let bounds = CGRect(
+                x: boundsDict["X"] ?? 0,
+                y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0,
+                height: boundsDict["Height"] ?? 0
+            )
+            
+            guard bounds.width > 300, bounds.height > 300 else { continue }
+            
+            // Capture using CGWindowListCreateImage (deprecated but works correctly)
+            guard let cgImage = CGWindowListCreateImage(
+                bounds, .optionIncludingWindow, windowID, [.boundsIgnoreFraming]
+            ) else { continue }
+            
+            return (NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height)), bounds, pid, appName)
+        }
+        return nil
     }
     
     private func hashImage(_ image: NSImage) -> String {

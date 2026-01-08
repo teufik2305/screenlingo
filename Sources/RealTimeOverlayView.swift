@@ -7,15 +7,17 @@ class RealTimeOverlayView: NSView {
     private var hiddenBlockIds: Set<String> = []
     private let translatorState: TranslatorState
     private let onIgnoreText: (String) -> Void
+    private let onHiddenChanged: ([(original: String, translated: String)]) -> Void
     private var clickMonitor: Any?
     
     // Position stabilization - prevents "breathing" effect
     private var stablePositions: [String: CGRect] = [:]
     private let stabilityThreshold: CGFloat = 15  // Only update if moved more than 15px
     
-    init(frame: NSRect, translatorState: TranslatorState, onIgnoreText: @escaping (String) -> Void) {
+    init(frame: NSRect, translatorState: TranslatorState, onIgnoreText: @escaping (String) -> Void, onHiddenChanged: @escaping ([(original: String, translated: String)]) -> Void = { _ in }) {
         self.translatorState = translatorState
         self.onIgnoreText = onIgnoreText
+        self.onHiddenChanged = onHiddenChanged
         super.init(frame: frame)
         
         wantsLayer = true
@@ -93,19 +95,19 @@ class RealTimeOverlayView: NSView {
     private func showContextMenu(for block: TranslatedTextBlock) {
         let menu = NSMenu()
         
-        let copyItem = NSMenuItem(title: "📋 Copy Translation", action: #selector(copyTranslation(_:)), keyEquivalent: "")
+        let copyItem = NSMenuItem(title: "Copy Translation", action: #selector(copyTranslation(_:)), keyEquivalent: "")
         copyItem.representedObject = block.translatedText
         copyItem.target = self
         menu.addItem(copyItem)
         
-        let copyOriginalItem = NSMenuItem(title: "📋 Copy Original", action: #selector(copyOriginal(_:)), keyEquivalent: "")
+        let copyOriginalItem = NSMenuItem(title: "Copy Original", action: #selector(copyOriginal(_:)), keyEquivalent: "")
         copyOriginalItem.representedObject = block.originalText
         copyOriginalItem.target = self
         menu.addItem(copyOriginalItem)
         
         menu.addItem(NSMenuItem.separator())
         
-        let hideItem = NSMenuItem(title: "👁 Hide This Overlay", action: #selector(hideBlock(_:)), keyEquivalent: "")
+        let hideItem = NSMenuItem(title: "Hide This Overlay", action: #selector(hideBlock(_:)), keyEquivalent: "")
         hideItem.representedObject = block.originalText
         hideItem.target = self
         menu.addItem(hideItem)
@@ -114,18 +116,10 @@ class RealTimeOverlayView: NSView {
         
         // Always ignore full text
         let preview = block.originalText.count > 25 ? String(block.originalText.prefix(25)) + "..." : block.originalText
-        let ignoreItem = NSMenuItem(title: "🚫 Always Ignore \"\(preview)\"", action: #selector(ignoreText(_:)), keyEquivalent: "")
+        let ignoreItem = NSMenuItem(title: "Always Ignore \"\(preview)\"", action: #selector(ignoreText(_:)), keyEquivalent: "")
         ignoreItem.representedObject = block.originalText
         ignoreItem.target = self
         menu.addItem(ignoreItem)
-        
-        // Show hidden count if any
-        if !hiddenBlockIds.isEmpty {
-            menu.addItem(NSMenuItem.separator())
-            let showAllItem = NSMenuItem(title: "👁 Show All Hidden (\(hiddenBlockIds.count))", action: #selector(showAllHidden), keyEquivalent: "")
-            showAllItem.target = self
-            menu.addItem(showAllItem)
-        }
         
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
@@ -148,12 +142,28 @@ class RealTimeOverlayView: NSView {
         if let text = sender.representedObject as? String {
             hiddenBlockIds.insert(text)
             needsDisplay = true
+            notifyHiddenChanged()
         }
     }
     
-    @objc private func showAllHidden() {
+    func unhideBlock(_ originalText: String) {
+        hiddenBlockIds.remove(originalText)
+        needsDisplay = true
+        notifyHiddenChanged()
+    }
+    
+    func unhideAll() {
         hiddenBlockIds.removeAll()
         needsDisplay = true
+        notifyHiddenChanged()
+    }
+    
+    private func notifyHiddenChanged() {
+        // Build list of hidden blocks with their translations
+        let hiddenList = textBlocks
+            .filter { hiddenBlockIds.contains($0.originalText) }
+            .map { (original: $0.originalText, translated: $0.translatedText) }
+        onHiddenChanged(hiddenList)
     }
     
     @objc private func ignoreText(_ sender: NSMenuItem) {
@@ -293,3 +303,4 @@ class RealTimeOverlayView: NSView {
     
     override var isFlipped: Bool { false }
 }
+
