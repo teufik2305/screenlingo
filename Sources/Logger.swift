@@ -46,6 +46,7 @@ class TranslationStats {
     private var _apiCalls: Int = 0
     private var _appleTranslationCalls: Int = 0
     private var _libreTranslateCalls: Int = 0
+    private var _llmCalls: Int = 0
     private var _errors: Int = 0
     private var _totalCharacters: Int = 0
     private var _totalApiTime: TimeInterval = 0
@@ -56,27 +57,30 @@ class TranslationStats {
     var apiCalls: Int { queue.sync { _apiCalls } }
     var appleTranslationCalls: Int { queue.sync { _appleTranslationCalls } }
     var libreTranslateCalls: Int { queue.sync { _libreTranslateCalls } }
+    var llmCalls: Int { queue.sync { _llmCalls } }
     var errors: Int { queue.sync { _errors } }
     var totalCharacters: Int { queue.sync { _totalCharacters } }
     var averageApiTime: TimeInterval { 
         queue.sync { 
-            let calls = _apiCalls + _appleTranslationCalls + _libreTranslateCalls
+            let calls = _apiCalls + _appleTranslationCalls + _libreTranslateCalls + _llmCalls
             return calls > 0 ? _totalApiTime / Double(calls) : 0 
         }
     }
     var cacheHitRate: Double {
         queue.sync { 
-            let total = _cacheHits + _apiCalls + _appleTranslationCalls + _libreTranslateCalls
+            let total = _cacheHits + _apiCalls + _appleTranslationCalls + _libreTranslateCalls + _llmCalls
             return total > 0 ? Double(_cacheHits) / Double(total) * 100 : 0
         }
     }
     
-    func recordTranslation(cached: Bool, characters: Int, usedAppleTranslation: Bool = false, usedLibreTranslate: Bool = false) {
+    func recordTranslation(cached: Bool, characters: Int, usedAppleTranslation: Bool = false, usedLibreTranslate: Bool = false, usedLLM: Bool = false) {
         queue.sync {
             _totalTranslations += 1
             _totalCharacters += characters
             if cached {
                 _cacheHits += 1
+            } else if usedLLM {
+                _llmCalls += 1
             } else if usedLibreTranslate {
                 _libreTranslateCalls += 1
             } else if usedAppleTranslation {
@@ -103,6 +107,7 @@ class TranslationStats {
             _apiCalls = 0
             _appleTranslationCalls = 0
             _libreTranslateCalls = 0
+            _llmCalls = 0
             _errors = 0
             _totalCharacters = 0
             _totalApiTime = 0
@@ -123,6 +128,8 @@ class TranslationStats {
         Cache Hits:         \(cacheHits) (\(String(format: "%.1f", cacheHitRate))%)
         API Calls:          \(apiCalls)
         Apple Translation:  \(appleTranslationCalls)
+        LTEngine Calls:     \(libreTranslateCalls)
+        LLM Calls:          \(llmCalls)
         Avg Response Time:  \(String(format: "%.0f", averageApiTime * 1000))ms
         Characters:         \(totalCharacters)
         Errors:             \(errors)
@@ -262,10 +269,12 @@ class AppLogger {
         debug("Translating: '\(text.prefix(40))...'", category: .translation)
     }
     
-    func translationCompleted(_ original: String, _ translated: String, cached: Bool, usedAppleTranslation: Bool, usedLibreTranslate: Bool = false, duration: TimeInterval) {
+    func translationCompleted(_ original: String, _ translated: String, cached: Bool, usedAppleTranslation: Bool, usedLibreTranslate: Bool = false, usedLLM: Bool = false, duration: TimeInterval) {
         let source: String
         if cached {
             source = "CACHE"
+        } else if usedLLM {
+            source = "LLM"
         } else if usedLibreTranslate {
             source = "LTENGINE"
         } else if usedAppleTranslation {
@@ -275,7 +284,7 @@ class AppLogger {
         }
         let timeStr = cached ? "" : " [\(String(format: "%.0f", duration * 1000))ms]"
         debug("[\(source)] '\(original.prefix(25))...' -> '\(translated.prefix(25))...'\(timeStr)", category: .translation)
-        stats.recordTranslation(cached: cached, characters: original.count, usedAppleTranslation: usedAppleTranslation, usedLibreTranslate: usedLibreTranslate)
+        stats.recordTranslation(cached: cached, characters: original.count, usedAppleTranslation: usedAppleTranslation, usedLibreTranslate: usedLibreTranslate, usedLLM: usedLLM)
         if !cached {
             stats.recordApiTime(duration)
         }

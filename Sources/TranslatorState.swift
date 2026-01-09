@@ -57,12 +57,14 @@ enum TranslationServiceType: Int, CaseIterable {
     case apple = 0
     case ltEngine = 1
     case google = 2
+    case llm = 3
     
     var name: String {
         switch self {
         case .apple: return "Apple"
         case .ltEngine: return "LibreTranslate"
         case .google: return "Google"
+        case .llm: return "LLM"
         }
     }
     
@@ -71,6 +73,7 @@ enum TranslationServiceType: Int, CaseIterable {
         case .apple: return "apple.logo"
         case .ltEngine: return "server.rack"
         case .google: return "network"
+        case .llm: return "brain"
         }
     }
     
@@ -79,6 +82,7 @@ enum TranslationServiceType: Int, CaseIterable {
         case .apple: return .blue
         case .ltEngine: return .green
         case .google: return .orange
+        case .llm: return .purple
         }
     }
     
@@ -87,6 +91,7 @@ enum TranslationServiceType: Int, CaseIterable {
         case .apple: return "On-device, private"
         case .ltEngine: return "Open source, flexible"
         case .google: return "Cloud API"
+        case .llm: return "GPT / Claude"
         }
     }
     
@@ -98,6 +103,8 @@ enum TranslationServiceType: Int, CaseIterable {
             return "Connects to any LibreTranslate-compatible server (including LTEngine). Can be self-hosted locally or use a remote server. Default: localhost:5000."
         case .google: 
             return "Uses Google Translate's public API (translate.googleapis.com). Fast and reliable with broad language support. Text is sent to Google's servers. No API key required. Works out of the box."
+        case .llm:
+            return "Uses OpenAI GPT or Anthropic Claude for high-quality AI translation. Auto-detects provider from URL. Supports any OpenAI-compatible API (including local LLMs via Ollama, LM Studio, etc.)."
         }
     }
     
@@ -109,6 +116,8 @@ enum TranslationServiceType: Int, CaseIterable {
             return "Languages fetched from your configured server"
         case .google:
             return "Supports 100+ languages including Bosnian, Croatian, Serbian"
+        case .llm:
+            return "Supports all languages the LLM model understands"
         }
     }
     
@@ -118,7 +127,7 @@ enum TranslationServiceType: Int, CaseIterable {
         case .apple:
             // Apple Translation supported languages (macOS 15+)
             return ["ar", "zh", "zh-Hans", "zh-Hant", "nl", "en", "fr", "de", "hi", "id", "it", "ja", "ko", "pl", "pt", "pt-BR", "ru", "es", "th", "tr", "uk", "vi"]
-        case .ltEngine, .google:
+        case .ltEngine, .google, .llm:
             return nil  // All languages supported
         }
     }
@@ -132,8 +141,28 @@ enum TranslationServiceType: Int, CaseIterable {
     // Whether this service supports automatic language detection
     var supportsAutoDetect: Bool {
         switch self {
-        case .ltEngine, .google: return true
+        case .ltEngine, .google, .llm: return true
         case .apple: return false
+        }
+    }
+}
+
+// MARK: - LLM Provider Detection
+
+enum LLMProvider: String {
+    case openai = "OpenAI"
+    case anthropic = "Claude"
+    case gemini = "Gemini"
+    case ollama = "Ollama"
+    case other = "OpenAI-compatible"
+    
+    var defaultModel: String {
+        switch self {
+        case .openai: return "gpt-4.1-mini"  // Fast & efficient (Apr 2025)
+        case .anthropic: return "claude-haiku-4-5"  // Fast & efficient (Oct 2025)
+        case .gemini: return "gemini-2.5-flash"  // Fast & efficient (Jun 2025)
+        case .ollama: return "llama3.3"
+        case .other: return "gpt-4.1-mini"
         }
     }
 }
@@ -233,6 +262,54 @@ class TranslatorState: ObservableObject {
     // LTEngine / LibreTranslate settings
     @AppStorage("libreTranslateUrl", store: TranslatorState.preferencesStore) var libreTranslateUrl: String = "http://localhost:5000/translate"
     @AppStorage("libreTranslateApiKey", store: TranslatorState.preferencesStore) var libreTranslateApiKey: String = ""  // Optional API key
+    
+    // LLM (OpenAI GPT / Claude / Gemini) settings
+    @AppStorage("llmApiUrl", store: TranslatorState.preferencesStore) var llmApiUrl: String = "https://api.openai.com/v1/chat/completions"
+    @AppStorage("llmModel", store: TranslatorState.preferencesStore) var llmModel: String = "gpt-4.1-mini"
+    
+    // Separate API keys for each provider
+    @AppStorage("openaiApiKey", store: TranslatorState.preferencesStore) var openaiApiKey: String = ""
+    @AppStorage("anthropicApiKey", store: TranslatorState.preferencesStore) var anthropicApiKey: String = ""
+    @AppStorage("geminiApiKey", store: TranslatorState.preferencesStore) var geminiApiKey: String = ""
+    @AppStorage("ollamaApiKey", store: TranslatorState.preferencesStore) var ollamaApiKey: String = ""  // Usually not needed
+    @AppStorage("otherLlmApiKey", store: TranslatorState.preferencesStore) var otherLlmApiKey: String = ""
+    
+    // Get the API key for the current provider
+    var currentLlmApiKey: String {
+        get {
+            switch detectedLLMProvider {
+            case .openai: return openaiApiKey
+            case .anthropic: return anthropicApiKey
+            case .gemini: return geminiApiKey
+            case .ollama: return ollamaApiKey
+            case .other: return otherLlmApiKey
+            }
+        }
+        set {
+            switch detectedLLMProvider {
+            case .openai: openaiApiKey = newValue
+            case .anthropic: anthropicApiKey = newValue
+            case .gemini: geminiApiKey = newValue
+            case .ollama: ollamaApiKey = newValue
+            case .other: otherLlmApiKey = newValue
+            }
+        }
+    }
+    
+    // Detect LLM provider from URL
+    var detectedLLMProvider: LLMProvider {
+        let url = llmApiUrl.lowercased()
+        if url.contains("anthropic") {
+            return .anthropic
+        } else if url.contains("generativelanguage.googleapis") || url.contains("gemini") {
+            return .gemini
+        } else if url.contains("openai") {
+            return .openai
+        } else if url.contains("localhost") || url.contains("127.0.0.1") || url.contains("ollama") {
+            return .ollama
+        }
+        return .other
+    }
     
     // Computed property to get the base URL for LTEngine (removes /translate suffix if present)
     var ltEngineBaseUrl: String {
@@ -543,6 +620,7 @@ class TranslatorState: ObservableObject {
     // Convenience properties for backward compatibility
     var useLibreTranslate: Bool { translationService == .ltEngine }
     var useAppleTranslation: Bool { translationService == .apple }
+    var useLLM: Bool { translationService == .llm }
     
     // Script/transliteration settings
     @AppStorage("forceSerbianLatin", store: TranslatorState.preferencesStore) var forceSerbianLatin: Bool = true  // Convert Cyrillic to Latin for Serbian
@@ -700,6 +778,9 @@ class TranslatorState: ObservableObject {
             return Self.supportedLanguages
         case .apple:
             return Self.supportedLanguages.filter { translationService.isLanguageSupported($0.code) }
+        case .llm:
+            // LLMs can translate to/from any language
+            return Self.supportedLanguages
         }
     }
     

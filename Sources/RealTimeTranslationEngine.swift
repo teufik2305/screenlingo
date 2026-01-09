@@ -583,14 +583,18 @@ class RealTimeTranslationEngine {
                                 to: targetLanguage,
                                 useAppleTranslation: translatorState.useAppleTranslation,
                                 useLibreTranslate: translatorState.useLibreTranslate,
+                                useLLM: translatorState.useLLM,
                                 libreTranslateUrl: translatorState.libreTranslateUrl.isEmpty ? nil : translatorState.libreTranslateUrl,
                                 libreTranslateApiKey: translatorState.libreTranslateApiKey.isEmpty ? nil : translatorState.libreTranslateApiKey,
+                                llmApiUrl: translatorState.llmApiUrl.isEmpty ? nil : translatorState.llmApiUrl,
+                                llmApiKey: translatorState.currentLlmApiKey.isEmpty ? nil : translatorState.currentLlmApiKey,
+                                llmModel: translatorState.llmModel.isEmpty ? nil : translatorState.llmModel,
                                 customApiUrl: translatorState.customApiUrl.isEmpty ? nil : translatorState.customApiUrl,
                                 forceSerbianLatin: translatorState.forceSerbianLatin
                             )
                             let duration = Date().timeIntervalSince(startTime)
                             translation = result.text
-                            log.translationCompleted(text, translation, cached: false, usedAppleTranslation: result.usedAppleTranslation, usedLibreTranslate: result.usedLibreTranslate, duration: duration)
+                            log.translationCompleted(text, translation, cached: false, usedAppleTranslation: result.usedAppleTranslation, usedLibreTranslate: result.usedLibreTranslate, usedLLM: result.usedLLM, duration: duration)
                             self.addToCache(key: text, value: translation)
                         } catch {
                             log.translationFailed(text, error: error)
