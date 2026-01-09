@@ -63,7 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             print("[Permission] Accessibility OK")
             registerGlobalHotkey()
         } else {
-            print("[Permission] Accessibility required for global hotkey (Cmd+Ctrl+T)")
+            print("[Permission] Accessibility required for global hotkey (\(translatorState.hotkeyDisplayString))")
             print("             Grant permission in System Settings > Privacy & Security > Accessibility")
             // Start polling - will register hotkey once permission is granted
             startAccessibilityPolling()
@@ -76,9 +76,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         
         // Local monitor always works (for when app window is focused)
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.modifierFlags.contains([.command, .control]) && event.keyCode == 17 {
+            guard let self = self else { return event }
+            if self.isHotkeyMatch(event) {
                 DispatchQueue.main.async {
-                    self?.toggleTranslation()
+                    self.toggleTranslation()
                 }
             }
             return event
@@ -93,7 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             self?.clearTranslationCache()
         }
         
-        print("Overlay Translator started! Press Cmd+Ctrl+T to toggle.")
+        print("Overlay Translator started! Press \(translatorState.hotkeyDisplayString) to toggle.")
     }
     
     private func registerGlobalHotkey() {
@@ -101,16 +102,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         guard globalHotkeyMonitor == nil else { return }
         
         globalHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.modifierFlags.contains([.command, .control]) && event.keyCode == 17 {
+            guard let self = self else { return }
+            if self.isHotkeyMatch(event) {
                 DispatchQueue.main.async {
-                    self?.toggleTranslation()
+                    self.toggleTranslation()
                 }
             }
         }
         
         if globalHotkeyMonitor != nil {
-            print("[Hotkey] Global hotkey (Cmd+Ctrl+T) registered successfully")
+            print("[Hotkey] Global hotkey (\(translatorState.hotkeyDisplayString)) registered successfully")
         }
+    }
+    
+    private func isHotkeyMatch(_ event: NSEvent) -> Bool {
+        let expectedKeyCode = UInt16(translatorState.hotkeyKeyCode)
+        let expectedModifiers = NSEvent.ModifierFlags(rawValue: UInt(translatorState.hotkeyModifiers))
+        let relevantModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        
+        return event.keyCode == expectedKeyCode &&
+               event.modifierFlags.intersection(relevantModifiers) == expectedModifiers.intersection(relevantModifiers)
     }
     
     private func startAccessibilityPolling() {
@@ -146,12 +157,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             defer: false
         )
         
-        window.level = .floating
+        // Use the highest possible window level to appear above everything
+        // Note: Games using exclusive fullscreen (Metal/OpenGL direct rendering) bypass the window compositor
+        // and cannot have overlays - user must run game in windowed/borderless mode
+        window.level = .screenSaver  // Level 1000 - highest standard level
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
         window.ignoresMouseEvents = true  // Always pass through - use global monitors for interaction
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        // Collection behaviors for appearing on all spaces and over fullscreen apps
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         
         let overlayView = RealTimeOverlayView(
             frame: screen.frame,

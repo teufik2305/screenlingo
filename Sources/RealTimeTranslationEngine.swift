@@ -585,7 +585,8 @@ class RealTimeTranslationEngine {
                                 useLibreTranslate: translatorState.useLibreTranslate,
                                 libreTranslateUrl: translatorState.libreTranslateUrl.isEmpty ? nil : translatorState.libreTranslateUrl,
                                 libreTranslateApiKey: translatorState.libreTranslateApiKey.isEmpty ? nil : translatorState.libreTranslateApiKey,
-                                customApiUrl: translatorState.customApiUrl.isEmpty ? nil : translatorState.customApiUrl
+                                customApiUrl: translatorState.customApiUrl.isEmpty ? nil : translatorState.customApiUrl,
+                                forceSerbianLatin: translatorState.forceSerbianLatin
                             )
                             let duration = Date().timeIntervalSince(startTime)
                             translation = result.text

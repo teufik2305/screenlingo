@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 
 class RealTimeOverlayView: NSView {
     private var textBlocks: [TranslatedTextBlock] = []

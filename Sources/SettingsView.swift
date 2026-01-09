@@ -31,6 +31,12 @@ struct SettingsView: View {
                     .tabItem {
                         Label("Advanced", systemImage: "wrench.and.screwdriver")
                     }
+                
+                // About Tab
+                AboutSettingsTab()
+                    .tabItem {
+                        Label("About", systemImage: "info.circle")
+                    }
             }
             .padding(.top, 8)
             
@@ -102,6 +108,20 @@ struct GeneralSettingsTab: View {
                         switch state.translationService {
                         case .ltEngine:
                             VStack(alignment: .leading, spacing: 8) {
+                                // Compatibility note
+                                HStack(spacing: 6) {
+                                    Image(systemName: "info.circle.fill")
+                                        .foregroundStyle(.blue)
+                                        .font(.caption)
+                                    Text("Works with LibreTranslate & LTEngine servers")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 4)
+                                .padding(.horizontal, 8)
+                                .background(Color.blue.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                
                                 Text("Server URL")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -133,12 +153,29 @@ struct GeneralSettingsTab: View {
                                 TextField("Default: translate.googleapis.com", text: $state.customApiUrl)
                                     .textFieldStyle(.roundedBorder)
                                     .font(.system(.body, design: .monospaced))
+                                    .onChange(of: state.customApiUrl) { _, newValue in
+                                        // Clear cached languages when URL changes
+                                        state.googleLanguages = []
+                                        state.googleLanguagesError = nil
+                                        // Fetch languages if custom URL is set
+                                        if !newValue.trimmingCharacters(in: .whitespaces).isEmpty {
+                                            state.fetchGoogleLanguages(force: true)
+                                        }
+                                    }
                                 
                                 if state.customApiUrl.isEmpty {
-                                    Text("Using default: \(TranslatorState.defaultApiUrl)")
+                                    Text("Using default: \(TranslationService.defaultApiUrl)")
                                         .font(.caption2)
                                         .foregroundStyle(.tertiary)
                                 }
+                                
+                                Text("API Key (optional)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                
+                                SecureField("Leave empty if not required", text: $state.googleApiKey)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.body, design: .monospaced))
                             }
                             .transition(.opacity.combined(with: .move(edge: .top)))
                         }
@@ -147,28 +184,123 @@ struct GeneralSettingsTab: View {
                 
                 // Languages
                 settingsSection("Languages") {
-                    HStack(spacing: 12) {
-                        Picker("From", selection: $state.sourceLanguage) {
-                            ForEach(state.availableSourceLanguages, id: \.code) { lang in
-                                Text(lang.name).tag(lang.code)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 12) {
+                            Picker("From", selection: $state.sourceLanguage) {
+                                ForEach(state.availableSourceLanguages, id: \.code) { lang in
+                                    Text(lang.name).tag(lang.code)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            
+                            Button(action: { state.swapLanguages() }) {
+                                Image(systemName: "arrow.left.arrow.right")
+                                    .font(.caption)
+                                    .foregroundStyle(state.sourceLanguage == "auto" ? .tertiary : .secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(state.sourceLanguage == "auto")
+                            
+                            Picker("To", selection: $state.targetLanguage) {
+                                ForEach(state.availableLanguages, id: \.code) { lang in
+                                    Text(lang.name).tag(lang.code)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        
+                        // LTEngine connection error indicator
+                        if state.translationService == .ltEngine {
+                            if state.isLoadingLTEngineLanguages {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                    Text("Loading languages from server...")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else if let error = state.ltEngineLanguagesError {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .font(.caption)
+                                    Text(error)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Retry") {
+                                        state.retryLTEngineLanguageFetch()
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.blue)
+                                }
+                            } else if !state.ltEngineLanguages.isEmpty {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .font(.caption)
+                                    Text("\(state.ltEngineLanguages.count) languages from server")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
-                        .frame(maxWidth: .infinity)
                         
-                        Button(action: { state.swapLanguages() }) {
-                            Image(systemName: "arrow.left.arrow.right")
-                                .font(.caption)
-                                .foregroundStyle(state.sourceLanguage == "auto" ? .tertiary : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(state.sourceLanguage == "auto")
-                        
-                        Picker("To", selection: $state.targetLanguage) {
-                            ForEach(state.availableLanguages, id: \.code) { lang in
-                                Text(lang.name).tag(lang.code)
+                        // Google Translate custom API indicator
+                        if state.translationService == .google && state.hasCustomGoogleApi {
+                            if state.isLoadingGoogleLanguages {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                    Text("Loading languages from server...")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else if let error = state.googleLanguagesError {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .font(.caption)
+                                    Text(error)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Retry") {
+                                        state.retryGoogleLanguageFetch()
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.blue)
+                                }
+                            } else if !state.googleLanguages.isEmpty {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .font(.caption)
+                                    Text("\(state.googleLanguages.count) languages from server")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
-                        .frame(maxWidth: .infinity)
+                        
+                        // Serbian script option - show when target is Serbian
+                        if state.targetLanguage.hasPrefix("sr") {
+                            Divider()
+                                .padding(.vertical, 4)
+                            
+                            Toggle(isOn: $state.forceSerbianLatin) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Force Latin script")
+                                        .font(.callout)
+                                    Text("Convert Cyrillic → Latin after translation")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.switch)
+                        }
                     }
                 }
                 
@@ -333,11 +465,189 @@ struct FiltersSettingsTab: View {
 struct AdvancedSettingsTab: View {
     @ObservedObject var state: TranslatorState
     @State private var showingStats = false
+    @State private var isRecordingHotkey = false
     
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Logging
+                // Performance (first section)
+                settingsSection("Performance") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // OCR Settings
+                        Toggle(isOn: $state.ocrAccurate) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Accurate OCR")
+                                Text(state.ocrAccurate ? "Better recognition, slightly slower" : "Faster, may miss some text")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        // Capture Interval
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Capture Interval")
+                                Spacer()
+                                Text("\(Int(state.captureInterval * 1000))ms")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $state.captureInterval, in: 0.03...0.5, step: 0.01)
+                            Text("Screen capture frequency. Lower = smoother, higher CPU.")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        
+                        Divider()
+                        
+                        // Stability Threshold
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Stability Threshold")
+                                Spacer()
+                                Text("\(Int(state.stabilityThreshold))px")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $state.stabilityThreshold, in: 0...50, step: 1)
+                            Text("Ignore small position changes to prevent jitter.")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        
+                        Divider()
+                        
+                        // Text Grouping
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Text Grouping")
+                                Spacer()
+                                Text(groupingLabel(state.textGrouping))
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $state.textGrouping, in: 0.5...2.0, step: 0.25)
+                            Text("Group nearby text lines. Higher = better for manga/comics.")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        
+                        Divider()
+                        
+                        // Min Text Length
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Min Text Length")
+                                Spacer()
+                                Text("\(state.minTextLength) chars")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: Binding(
+                                get: { Double(state.minTextLength) },
+                                set: { state.minTextLength = Int($0) }
+                            ), in: 1...10, step: 1)
+                            Text("Skip text shorter than this to reduce noise.")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        
+                        Divider()
+                        
+                        // Cache
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Cache Size")
+                                Spacer()
+                                Text("\(state.maxCacheSize)")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: Binding(
+                                get: { Double(state.maxCacheSize) },
+                                set: { state.maxCacheSize = Int($0) }
+                            ), in: 100...2000, step: 100)
+                        }
+                        
+                        HStack {
+                            Button(action: {
+                                NotificationCenter.default.post(name: TranslatorState.clearCacheNotification, object: nil)
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "trash")
+                                    Text("Clear Cache")
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            Text("Clears all cached translations")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                
+                // Keyboard Shortcuts
+                settingsSection("Keyboard Shortcuts") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Toggle Translation")
+                            Spacer()
+                            
+                            if isRecordingHotkey {
+                                HStack(spacing: 6) {
+                                    Text("Press keys...")
+                                        .foregroundStyle(.secondary)
+                                    
+                                    Button("Cancel") {
+                                        isRecordingHotkey = false
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.red)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor.opacity(0.2))
+                                .cornerRadius(6)
+                            } else {
+                                Button(action: {
+                                    isRecordingHotkey = true
+                                }) {
+                                    Text(state.hotkeyDisplayString)
+                                        .font(.system(.body, design: .monospaced))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color(nsColor: .windowBackgroundColor))
+                                        .cornerRadius(6)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        
+                        if isRecordingHotkey {
+                            Text("Press a key combination with ⌘, ⌃, ⌥, or ⇧")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Text("Requires app restart to take effect")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .background(
+                        HotkeyRecorderView(
+                            isRecording: $isRecordingHotkey,
+                            keyCode: $state.hotkeyKeyCode,
+                            modifiers: $state.hotkeyModifiers
+                        )
+                        .frame(width: 0, height: 0)
+                    )
+                }
+                
+                // Logging (at the bottom)
                 settingsSection("Logging") {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle(isOn: $state.enableFileLogging) {
@@ -345,6 +655,8 @@ struct AdvancedSettingsTab: View {
                         }
                         
                         if state.enableFileLogging {
+                            Divider()
+                            
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Log Level")
                                     .font(.caption)
@@ -399,158 +711,6 @@ struct AdvancedSettingsTab: View {
                         }
                     }
                 }
-                
-                // Performance
-                settingsSection("Performance") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Capture Interval")
-                                Spacer()
-                                Text("\(Int(state.captureInterval * 1000))ms")
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Slider(value: $state.captureInterval, in: 0.03...0.5, step: 0.01)
-                            Text("How often to capture screen. Lower = smoother but uses more CPU.")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        
-                        Divider()
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Stability Threshold")
-                                Spacer()
-                                Text("\(Int(state.stabilityThreshold))px")
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Slider(value: $state.stabilityThreshold, in: 0...50, step: 1)
-                            Text("Ignore position changes smaller than this. Prevents jitter.")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        
-                        Divider()
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Min Text Length")
-                                Spacer()
-                                Text("\(state.minTextLength) chars")
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Slider(value: Binding(
-                                get: { Double(state.minTextLength) },
-                                set: { state.minTextLength = Int($0) }
-                            ), in: 1...10, step: 1)
-                            Text("Skip text shorter than this. Reduces noise from short labels.")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        
-                        Divider()
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Cache Size")
-                                Spacer()
-                                Text("\(state.maxCacheSize)")
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Slider(value: Binding(
-                                get: { Double(state.maxCacheSize) },
-                                set: { state.maxCacheSize = Int($0) }
-                            ), in: 100...2000, step: 100)
-                            Text("Max translations to cache. Higher = more memory but faster.")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        
-                        Divider()
-                        
-                        Toggle(isOn: $state.ocrAccurate) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Accurate OCR")
-                                Text(state.ocrAccurate ? "Better text recognition, slightly slower" : "Faster recognition, may miss some text")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        
-                        Divider()
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Text Grouping")
-                                Spacer()
-                                Text(groupingLabel(state.textGrouping))
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Slider(value: $state.textGrouping, in: 0.5...2.0, step: 0.25)
-                            Text("How aggressively to group text lines. Higher = better for manga/comics.")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        
-                        Divider()
-                        
-                        HStack {
-                            Button(action: {
-                                NotificationCenter.default.post(name: TranslatorState.clearCacheNotification, object: nil)
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "trash")
-                                    Text("Clear Translation Cache")
-                                }
-                            }
-                            
-                            Spacer()
-                            
-                            Text("Clears all cached translations")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-                
-                // Keyboard Shortcuts
-                settingsSection("Keyboard Shortcuts") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        shortcutRow("Toggle Translation", shortcut: "⌘⌃T")
-                    }
-                }
-                
-                // Tips
-                settingsSection("Tips") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        tipRow("Click overlay for options (copy, hide, ignore)")
-                        tipRow("Hidden overlays: click any overlay → Show All")
-                        tipRow("Add apps to Excluded Apps to skip translation")
-                        tipRow("Use Ignore Patterns to filter unwanted text")
-                    }
-                }
-                
-                // About
-                settingsSection("About") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Overlay Translator")
-                                .fontWeight(.medium)
-                            Spacer()
-                            Text("v1.0")
-                                .foregroundStyle(.secondary)
-                        }
-                        Text("Real-time screen translation for macOS")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
             }
             .padding()
         }
@@ -572,31 +732,6 @@ struct AdvancedSettingsTab: View {
         }
     }
     
-    @ViewBuilder
-    private func shortcutRow(_ action: String, shortcut: String) -> some View {
-        HStack {
-            Text(action)
-            Spacer()
-            Text(shortcut)
-                .font(.system(.body, design: .monospaced))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color(nsColor: .windowBackgroundColor))
-                .cornerRadius(4)
-        }
-    }
-    
-    @ViewBuilder
-    private func tipRow(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "lightbulb.fill")
-                .foregroundStyle(.yellow)
-                .font(.caption)
-            Text(text)
-                .font(.callout)
-        }
-    }
-    
     private func groupingLabel(_ value: Double) -> String {
         if value <= 0.5 { return "Minimal" }
         if value <= 0.75 { return "Light" }
@@ -612,6 +747,134 @@ struct AdvancedSettingsTab: View {
         case 2: return "Warnings and errors only"
         case 3: return "Errors only - minimal logging"
         default: return ""
+        }
+    }
+}
+
+// MARK: - Hotkey Recorder
+
+struct HotkeyRecorderView: NSViewRepresentable {
+    @Binding var isRecording: Bool
+    @Binding var keyCode: Int
+    @Binding var modifiers: Int
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = HotkeyRecorderNSView()
+        view.coordinator = context.coordinator
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let view = nsView as? HotkeyRecorderNSView else { return }
+        if isRecording && !view.isListening {
+            view.startListening()
+        } else if !isRecording && view.isListening {
+            view.stopListening()
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator {
+        var parent: HotkeyRecorderView
+        
+        init(_ parent: HotkeyRecorderView) {
+            self.parent = parent
+        }
+        
+        func recordKey(keyCode: Int, modifiers: Int) {
+            parent.keyCode = keyCode
+            parent.modifiers = modifiers
+            parent.isRecording = false
+        }
+    }
+}
+
+class HotkeyRecorderNSView: NSView {
+    var coordinator: HotkeyRecorderView.Coordinator?
+    var isListening = false
+    private var localMonitor: Any?
+    
+    func startListening() {
+        isListening = true
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+            
+            // Require at least one modifier
+            let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            if !mods.isEmpty {
+                self.coordinator?.recordKey(
+                    keyCode: Int(event.keyCode),
+                    modifiers: Int(mods.rawValue)
+                )
+                return nil  // Consume the event
+            }
+            return event
+        }
+    }
+    
+    func stopListening() {
+        isListening = false
+        if let monitor = localMonitor {
+            NSEvent.removeMonitor(monitor)
+            localMonitor = nil
+        }
+    }
+    
+    override func removeFromSuperview() {
+        stopListening()
+        super.removeFromSuperview()
+    }
+}
+
+// MARK: - About Settings Tab
+
+struct AboutSettingsTab: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Application
+                settingsSection("Application") {
+                    HStack(spacing: 16) {
+                        Image(nsImage: NSApp.applicationIconImage)
+                            .resizable()
+                            .frame(width: 64, height: 64)
+                            .cornerRadius(14)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("ScreenLingo")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                            
+                            Text("Version 1.0")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            
+                            Text("Real-time screen translation for macOS")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        
+                        Spacer()
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+    
+    @ViewBuilder
+    private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+            
+            content()
+                .padding()
+                .background(Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(8)
         }
     }
 }

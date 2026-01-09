@@ -38,6 +38,36 @@ actor TranslationService {
     static let defaultApiUrl = "https://translate.googleapis.com/translate_a/single"
     static let defaultLibreTranslateUrl = "http://localhost:5000/translate"
     
+    // Serbian Cyrillic to Latin transliteration map
+    private static let serbianCyrillicToLatin: [Character: String] = [
+        "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Ђ": "Đ", "Е": "E", "Ж": "Ž",
+        "З": "Z", "И": "I", "Ј": "J", "К": "K", "Л": "L", "Љ": "Lj", "М": "M", "Н": "N",
+        "Њ": "Nj", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T", "Ћ": "Ć", "У": "U",
+        "Ф": "F", "Х": "H", "Ц": "C", "Ч": "Č", "Џ": "Dž", "Ш": "Š",
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "ђ": "đ", "е": "e", "ж": "ž",
+        "з": "z", "и": "i", "ј": "j", "к": "k", "л": "l", "љ": "lj", "м": "m", "н": "n",
+        "њ": "nj", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "ћ": "ć", "у": "u",
+        "ф": "f", "х": "h", "ц": "c", "ч": "č", "џ": "dž", "ш": "š"
+    ]
+    
+    // Convert Serbian Cyrillic text to Latin script
+    static func transliterateSerbianToLatin(_ text: String) -> String {
+        var result = ""
+        for char in text {
+            if let latin = serbianCyrillicToLatin[char] {
+                result += latin
+            } else {
+                result.append(char)
+            }
+        }
+        return result
+    }
+    
+    // Check if text contains Serbian Cyrillic characters
+    static func containsSerbianCyrillic(_ text: String) -> Bool {
+        text.contains { serbianCyrillicToLatin[$0] != nil }
+    }
+    
     // Check if Apple Translation is available (requires macOS 26+)
     static var isAppleTranslationAvailable: Bool {
         if #available(macOS 26.0, *) {
@@ -57,23 +87,25 @@ actor TranslationService {
         useLibreTranslate: Bool = false,
         libreTranslateUrl: String? = nil,
         libreTranslateApiKey: String? = nil,
-        customApiUrl: String? = nil
+        customApiUrl: String? = nil,
+        forceSerbianLatin: Bool = false
     ) async throws -> TranslationResult {
+        
+        var result: TranslationResult
         
         // Priority 1: LibreTranslate / LTEngine (self-hosted)
         if useLibreTranslate {
             let url = libreTranslateUrl?.isEmpty == false ? libreTranslateUrl! : defaultLibreTranslateUrl
             let apiKey = libreTranslateApiKey?.isEmpty == false ? libreTranslateApiKey : nil
-            let result = try await translateWithLibreTranslate(text: text, from: sourceLang, to: targetLang, apiUrl: url, apiKey: apiKey)
-            return TranslationResult(text: result, usedAppleTranslation: false, usedLibreTranslate: true)
+            let translatedText = try await translateWithLibreTranslate(text: text, from: sourceLang, to: targetLang, apiUrl: url, apiKey: apiKey)
+            result = TranslationResult(text: translatedText, usedAppleTranslation: false, usedLibreTranslate: true)
         }
-        
         // Priority 2: Apple Translation
-        if useAppleTranslation {
+        else if useAppleTranslation {
             if #available(macOS 26.0, *) {
                 // macOS 26+ - use Apple Translation (NO API)
-                let result = try await translateWithAppleFramework(text: text, from: sourceLang, to: targetLang)
-                return TranslationResult(text: result, usedAppleTranslation: true)
+                let translatedText = try await translateWithAppleFramework(text: text, from: sourceLang, to: targetLang)
+                result = TranslationResult(text: translatedText, usedAppleTranslation: true)
             } else {
                 // macOS < 26 - Apple Translation NOT available, must use API as fallback
                 // Log warning once per session
@@ -82,15 +114,24 @@ actor TranslationService {
                     hasLoggedFallbackWarning = true
                 }
                 let apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
-                let result = try await translateWithApi(text: text, from: sourceLang, to: targetLang, apiUrl: apiUrl)
-                return TranslationResult(text: result, usedAppleTranslation: false)
+                let translatedText = try await translateWithApi(text: text, from: sourceLang, to: targetLang, apiUrl: apiUrl)
+                result = TranslationResult(text: translatedText, usedAppleTranslation: false)
             }
         }
-        
         // Priority 3: Google Translate API (fallback)
-        let apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
-        let result = try await translateWithApi(text: text, from: sourceLang, to: targetLang, apiUrl: apiUrl)
-        return TranslationResult(text: result, usedAppleTranslation: false)
+        else {
+            let apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
+            let translatedText = try await translateWithApi(text: text, from: sourceLang, to: targetLang, apiUrl: apiUrl)
+            result = TranslationResult(text: translatedText, usedAppleTranslation: false)
+        }
+        
+        // Apply Serbian Cyrillic → Latin transliteration if enabled and target is Serbian
+        if forceSerbianLatin && targetLang.hasPrefix("sr") && containsSerbianCyrillic(result.text) {
+            let latinText = transliterateSerbianToLatin(result.text)
+            return TranslationResult(text: latinText, usedAppleTranslation: result.usedAppleTranslation, usedLibreTranslate: result.usedLibreTranslate)
+        }
+        
+        return result
     }
     
     // MARK: - Apple Translation Framework (macOS 26+)
@@ -137,9 +178,10 @@ actor TranslationService {
     // MARK: - LibreTranslate / LTEngine API
     
     private static func translateWithLibreTranslate(text: String, from sourceLang: String, to targetLang: String, apiUrl: String, apiKey: String?) async throws -> String {
-        // Clean up language codes
-        let source = sourceLang.components(separatedBy: "-").first ?? sourceLang
-        let target = targetLang.components(separatedBy: "-").first ?? targetLang
+        // Preserve full language codes including script variants (e.g., sr-Latn for Latin Serbian)
+        // Only strip region codes like pt-BR -> pt if the server doesn't support them
+        let source = sourceLang
+        let target = targetLang
         
         // Ensure URL ends with /translate
         var finalUrl = apiUrl
@@ -205,9 +247,10 @@ actor TranslationService {
     // MARK: - API Translation (Google Translate unofficial API)
     
     private static func translateWithApi(text: String, from sourceLang: String, to targetLang: String, apiUrl: String) async throws -> String {
-        // Clean up language codes
-        let source = sourceLang.components(separatedBy: "-").first ?? sourceLang
-        let target = targetLang.components(separatedBy: "-").first ?? targetLang
+        // Preserve full language codes including script variants (e.g., sr-Latn for Latin Serbian)
+        // Google Translate supports script variants like sr-Latn, zh-Hans, zh-Hant
+        let source = sourceLang
+        let target = targetLang
         
         // Build URL
         var components = URLComponents(string: apiUrl)!
