@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 @main
 struct OverlayTranslatorApp: App {
@@ -37,6 +38,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var settingsWindowController: SettingsWindowController?
     private var globalHotkeyMonitor: Any?
     private var accessibilityTimer: Timer?
+    private var cancellables = Set<AnyCancellable>()
     
     @Published var isTranslating = false
     @Published var hiddenOverlays: [(original: String, translated: String)] = []
@@ -93,6 +95,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         ) { [weak self] _ in
             self?.clearTranslationCache()
         }
+        
+        // Observe alwaysOnTop setting changes to update window level in real-time
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.updateOverlayWindowLevel(alwaysOnTop: self.translatorState.alwaysOnTop)
+            }
+            .store(in: &cancellables)
         
         print("Overlay Translator started! Press \(translatorState.hotkeyDisplayString) to toggle.")
     }
@@ -157,10 +168,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             defer: false
         )
         
-        // Use the highest possible window level to appear above everything
+        // Set window level based on user preference
+        // .screenSaver (Level 1000) = highest standard level, appears above everything
+        // .floating (Level 3) = above normal windows but below alerts/menus
         // Note: Games using exclusive fullscreen (Metal/OpenGL direct rendering) bypass the window compositor
         // and cannot have overlays - user must run game in windowed/borderless mode
-        window.level = .screenSaver  // Level 1000 - highest standard level
+        window.level = translatorState.alwaysOnTop ? .screenSaver : .floating
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
@@ -214,6 +227,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         overlayWindow = nil
         overlayView = nil
         hiddenOverlays = []
+    }
+    
+    private func updateOverlayWindowLevel(alwaysOnTop: Bool) {
+        guard let window = overlayWindow else { return }
+        window.level = alwaysOnTop ? .screenSaver : .floating
     }
     
     func unhideOverlay(_ originalText: String) {

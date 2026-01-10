@@ -203,6 +203,7 @@ class TranslatorState: ObservableObject {
     @AppStorage("overlayOpacity", store: TranslatorState.preferencesStore) var overlayOpacity: Double = 0.95
     @AppStorage("fontSize", store: TranslatorState.preferencesStore) var fontSize: Double = 20
     @AppStorage("interactionMode", store: TranslatorState.preferencesStore) var interactionModeRaw: Int = 0  // 0=click, 1=hover
+    @AppStorage("alwaysOnTop", store: TranslatorState.preferencesStore) var alwaysOnTop: Bool = true  // Keep overlay above all windows
     
     // MARK: Keyboard Shortcuts
     
@@ -712,9 +713,11 @@ class TranslatorState: ObservableObject {
     /// Additional languages like Serbian Latin are included for other services
     static let supportedLanguages: [(code: String, name: String)] = [
         ("ar", "Arabic"),
+        ("bs", "Bosnian"),
         ("zh", "Chinese"),
         ("zh-Hans", "Chinese (Simplified)"),
         ("zh-Hant", "Chinese (Traditional)"),
+        ("hr", "Croatian"),
         ("nl", "Dutch"),
         ("en", "English"),
         ("fr", "French"),

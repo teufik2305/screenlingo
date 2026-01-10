@@ -529,6 +529,15 @@ struct AppearanceSettingsTab: View {
                                 .font(.system(.body, design: .monospaced))
                         }
                         
+                        // Always on Top
+                        HStack {
+                            Toggle("Always on Top", isOn: $state.alwaysOnTop)
+                            Spacer()
+                        }
+                        Text("When enabled, overlay appears above all windows. Disable to allow other windows to cover the overlay.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
                         Divider()
                         
                         // Single unified preview
