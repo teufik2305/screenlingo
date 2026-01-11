@@ -33,6 +33,8 @@ enum LogCategory: String {
     case cache = "Cache"
     case ui = "UI"
     case app = "App"
+    case settings = "Settings"
+    case state = "State"
 }
 
 // MARK: - Translation Statistics

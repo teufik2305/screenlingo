@@ -1,20 +1,21 @@
 # ScreenLingo
 
-A macOS menu bar app that provides **real-time translation overlays** for any text on your screen. Perfect for games, manga, foreign documents, or any content in another language.
+Real-time screen translation overlay for macOS. Translates text in any window using OCR and displays translations directly over the original content.
 
 ## Features
 
-- **Real-time Translation** - Continuously translates text in the active window
-- **Multiple Translation Services**
-  - **Apple Translation** - On-device, private (macOS 15+)
-  - **LibreTranslate/LTEngine** - Self-hosted or remote server
-  - **Google Translate** - Works out of the box
-  - **LLM Translation** - OpenAI GPT, Anthropic Claude, Google Gemini, or local models via Ollama
-- **OCR Recognition** - Uses Apple Vision for accurate text detection
-- **Overlay Display** - Translations appear directly over original text
-- **Smart Caching** - Avoids re-translating seen text
-- **Click Interactions** - Copy, hide, or ignore overlays
-- **Global Hotkey** - Toggle with `Cmd+Ctrl+T`
+- Real-time OCR text detection (Apple Vision)
+- Multiple translation backends: Apple Translation, LibreTranslate, Google Translate, LLM (OpenAI/Claude)
+- Smart caching with persistence
+- Configurable text grouping for manga/comics/subtitles
+- Global hotkey toggle (Cmd+Ctrl+T)
+- Click or hover interaction modes
+
+## Requirements
+
+- macOS 14.0+ (Sonoma)
+- Screen Recording permission
+- Accessibility permission (for hotkey)
 
 ## Quick Start
 
@@ -26,58 +27,56 @@ swift build && .build/debug/OverlayTranslator
 ./build-app.sh && open ScreenLingo.app
 ```
 
-## Requirements
+Or run directly:
+```bash
+swift build && .build/debug/OverlayTranslator
+```
 
-- **macOS 14.0+** (Sonoma)
-- **Screen Recording** permission
-- **Accessibility** permission (for global hotkey)
+## Setup
 
-## Permissions
+1. **Grant Permissions** (System Settings > Privacy & Security):
+   - Screen Recording
+   - Accessibility
 
-On first run, grant permissions in **System Settings → Privacy & Security**:
-1. **Screen Recording** - For window capture
-2. **Accessibility** - For global keyboard shortcut
+2. **Configure Translation Service** (Settings > General):
+   | Service | Setup |
+   |---------|-------|
+   | Apple | None (macOS 15+, download language packs) |
+   | Google | Works out of box |
+   | LibreTranslate | Set server URL |
+   | LLM | Set API URL and key |
 
-## Settings
+3. **Select Languages** and start translating
 
-Access from menu bar → **Settings...**
+## Tech Stack
 
-- **Translation Service** - Choose Apple, LibreTranslate, Google, or LLM
-- **Languages** - Source/target language with auto-detect support
-- **Appearance** - Font size (12-24pt), overlay opacity
-- **Filters** - Excluded apps, ignore patterns
-- **Advanced** - Logging, performance tuning
+- **Swift 5.9** / SwiftUI
+- **Vision.framework** - OCR
+- **Translation.framework** - Apple Translation (macOS 15+)
+- **Swift Package Manager** - Build system
 
-## Translation Services
+## Project Structure
 
-| Service | Pros | Requirements |
-|---------|------|--------------|
-| **Apple** | Private, on-device, fast | macOS 15+, language packs |
-| **LibreTranslate** | Open source, self-hostable | Server URL |
-| **Google** | Reliable, 100+ languages | None (works out of box) |
-| **LLM** | High quality, context-aware | API key |
+```
+Sources/          # Application code (see Sources/README.md)
+Tests/            # Unit tests (see Tests/README.md)
+build-app.sh      # Creates ScreenLingo.app bundle
+Package.swift     # SPM manifest
+```
 
-### LLM Translation
+## Development
 
-Supports multiple AI providers with preset configurations:
+```bash
+# Build
+swift build
 
-- **OpenAI** - GPT-4.1, GPT-5, GPT-5.2
-- **Anthropic** - Claude Haiku/Sonnet/Opus 4.5
-- **Google Gemini** - Gemini 2.5 Flash/Pro
-- **Ollama** - Local models (Llama, Qwen, Gemma)
+# Test
+swift test
 
-Each provider stores its API key independently—switch freely without losing keys.
-
-## Supported Languages
-
-20+ languages including English, French, German, Spanish, Japanese, Korean, Chinese (Simplified/Traditional), Russian, Arabic, and more. LLM translation supports any language the model understands.
-
-## Notes
-
-- **Full-screen games**: Use windowed/borderless mode for overlays to appear
-- **Serbian**: Option to force Latin script (converts Cyrillic automatically)
-- **LLM errors**: Clear messages for invalid API keys, billing issues, rate limits
+# Build release app
+./build-app.sh
+```
 
 ## License
 
-MIT License
+MIT

@@ -96,6 +96,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             self?.clearTranslationCache()
         }
         
+        // Listen for delete cache file notification
+        NotificationCenter.default.addObserver(
+            forName: TranslatorState.deleteCacheFileNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.deleteCacheFile()
+        }
+        
+        // Listen for save cache notification
+        NotificationCenter.default.addObserver(
+            forName: TranslatorState.saveCacheNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.saveTranslationCache()
+        }
+        
+        // Save cache on app termination
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.saveTranslationCache()
+        }
+        
         // Observe alwaysOnTop setting changes to update window level in real-time
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: DispatchQueue.main)
@@ -244,6 +271,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     
     func clearTranslationCache() {
         translationEngine?.clearCache()
+    }
+    
+    func deleteCacheFile() {
+        log.info("Delete cache file button clicked", category: .app)
+        
+        let path = translatorState.effectiveCacheFilePath
+        log.info("Deleting cache file at: \(path)", category: .app)
+        
+        do {
+            let url = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: path) {
+                try FileManager.default.removeItem(at: url)
+                log.info("Cache file deleted: \(path)", category: .app)
+            } else {
+                log.info("No cache file to delete at \(path)", category: .app)
+            }
+        } catch {
+            log.error("Failed to delete cache file: \(error)", category: .app)
+        }
+    }
+    
+    func saveTranslationCache() {
+        translationEngine?.saveCache()
     }
     
     var cacheSize: Int {

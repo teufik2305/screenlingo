@@ -1,171 +1,6 @@
 import SwiftUI
-
-// MARK: - Models
-
-/// Language model for LTEngine/LibreTranslate API response
-struct LTEngineLanguage: Codable {
-    let code: String
-    let name: String
-    let targets: [String]?
-}
-
-// MARK: - Interaction Mode
-
-enum InteractionMode: Int, CaseIterable {
-    case click = 0
-    case hover = 1
-    
-    var name: String {
-        switch self {
-        case .click: return "Click"
-        case .hover: return "Hover"
-        }
-    }
-    
-    var icon: String {
-        switch self {
-        case .click: return "hand.tap"
-        case .hover: return "eye.slash"
-        }
-    }
-    
-    var color: Color {
-        switch self {
-        case .click: return .blue
-        case .hover: return .orange
-        }
-    }
-    
-    var shortDescription: String {
-        switch self {
-        case .click: return "Click for menu"
-        case .hover: return "Auto-hide"
-        }
-    }
-    
-    var detailedDescription: String {
-        switch self {
-        case .click: return "Click overlay → menu appears (copy, hide, ignore)"
-        case .hover: return "Move mouse over overlay → it disappears"
-        }
-    }
-}
-
-// MARK: - Translation Service Type
-
-enum TranslationServiceType: Int, CaseIterable {
-    case apple = 0
-    case ltEngine = 1
-    case google = 2
-    case llm = 3
-    
-    var name: String {
-        switch self {
-        case .apple: return "Apple"
-        case .ltEngine: return "LibreTranslate"
-        case .google: return "Google"
-        case .llm: return "LLM"
-        }
-    }
-    
-    var icon: String {
-        switch self {
-        case .apple: return "apple.logo"
-        case .ltEngine: return "server.rack"
-        case .google: return "network"
-        case .llm: return "brain"
-        }
-    }
-    
-    var color: Color {
-        switch self {
-        case .apple: return .blue
-        case .ltEngine: return .green
-        case .google: return .orange
-        case .llm: return .purple
-        }
-    }
-    
-    var shortDescription: String {
-        switch self {
-        case .apple: return "On-device, private"
-        case .ltEngine: return "Open source, flexible"
-        case .google: return "Cloud API"
-        case .llm: return "GPT / Claude"
-        }
-    }
-    
-    var detailedDescription: String {
-        switch self {
-        case .apple: 
-            return "Uses Apple's built-in Translation framework. Runs entirely on your Mac — no data sent to servers. Requires macOS 15+ and language packs to be downloaded. Fast and private."
-        case .ltEngine: 
-            return "Connects to any LibreTranslate-compatible server (including LTEngine). Can be self-hosted locally or use a remote server. Default: localhost:5000."
-        case .google: 
-            return "Uses Google Translate's public API (translate.googleapis.com). Fast and reliable with broad language support. Text is sent to Google's servers. No API key required. Works out of the box."
-        case .llm:
-            return "Uses OpenAI GPT or Anthropic Claude for high-quality AI translation. Auto-detects provider from URL. Supports any OpenAI-compatible API (including local LLMs via Ollama, LM Studio, etc.)."
-        }
-    }
-    
-    var supportedLanguagesNote: String {
-        switch self {
-        case .apple:
-            return "Arabic, Chinese (Simplified/Traditional), Dutch, English, French, German, Hindi, Indonesian, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Russian, Spanish, Thai, Turkish, Ukrainian, Vietnamese"
-        case .ltEngine:
-            return "Languages fetched from your configured server"
-        case .google:
-            return "Supports 100+ languages including Bosnian, Croatian, Serbian"
-        case .llm:
-            return "Supports all languages the LLM model understands"
-        }
-    }
-    
-    // Language codes supported by each service
-    var supportedLanguageCodes: Set<String>? {
-        switch self {
-        case .apple:
-            // Apple Translation supported languages (macOS 15+)
-            return ["ar", "zh", "zh-Hans", "zh-Hant", "nl", "en", "fr", "de", "hi", "id", "it", "ja", "ko", "pl", "pt", "pt-BR", "ru", "es", "th", "tr", "uk", "vi"]
-        case .ltEngine, .google, .llm:
-            return nil  // All languages supported
-        }
-    }
-    
-    func isLanguageSupported(_ code: String) -> Bool {
-        if code == "auto" { return supportsAutoDetect }
-        guard let supported = supportedLanguageCodes else { return true }
-        return supported.contains(code)
-    }
-    
-    // Whether this service supports automatic language detection
-    var supportsAutoDetect: Bool {
-        switch self {
-        case .ltEngine, .google, .llm: return true
-        case .apple: return false
-        }
-    }
-}
-
-// MARK: - LLM Provider Detection
-
-enum LLMProvider: String {
-    case openai = "OpenAI"
-    case anthropic = "Claude"
-    case gemini = "Gemini"
-    case ollama = "Ollama"
-    case other = "OpenAI-compatible"
-    
-    var defaultModel: String {
-        switch self {
-        case .openai: return "gpt-4.1-mini"  // Fast & efficient (Apr 2025)
-        case .anthropic: return "claude-haiku-4-5"  // Fast & efficient (Oct 2025)
-        case .gemini: return "gemini-2.5-flash"  // Fast & efficient (Jun 2025)
-        case .ollama: return "llama3.3"
-        case .other: return "gpt-4.1-mini"
-        }
-    }
-}
+import AppKit
+import Combine
 
 // MARK: - Translator State
 
@@ -176,6 +11,30 @@ class TranslatorState: ObservableObject {
     /// Shared UserDefaults store for consistent settings across app instances
     static let preferencesStore = UserDefaults(suiteName: "com.screenlingo.shared")!
     static let clearCacheNotification = Notification.Name("clearTranslationCache")
+    static let deleteCacheFileNotification = Notification.Name("deleteCacheFile")
+    static let saveCacheNotification = Notification.Name("saveTranslationCache")
+    
+    // MARK: Managers
+    
+    let excludedAppsManager = ExcludedAppsManager()
+    let ignorePatternManager = IgnorePatternManager()
+    
+    private var cancellables = Set<AnyCancellable>()
+    
+    init() {
+        // Forward manager changes to trigger TranslatorState updates
+        excludedAppsManager.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+        
+        ignorePatternManager.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
     
     // MARK: Dynamic Language Lists (fetched from servers)
     
@@ -184,98 +43,179 @@ class TranslatorState: ObservableObject {
     @Published var isLoadingLTEngineLanguages: Bool = false
     @Published var ltEngineLanguagesError: String? = nil
     private var lastLTEngineFetchAttempt: Date? = nil
-    private let ltEngineFetchCooldown: TimeInterval = 30  // seconds before retry
     
     // Cached Google Translate languages fetched from custom API
     @Published var googleLanguages: [(code: String, name: String)] = []
     @Published var isLoadingGoogleLanguages: Bool = false
     @Published var googleLanguagesError: String? = nil
     private var lastGoogleFetchAttempt: Date? = nil
-    private let googleFetchCooldown: TimeInterval = 30  // seconds before retry
     
     // MARK: Language Settings
     
-    @AppStorage("sourceLanguage", store: TranslatorState.preferencesStore) var sourceLanguage: String = "fr"
-    @AppStorage("targetLanguage", store: TranslatorState.preferencesStore) var targetLanguage: String = "en"
+    @AppStorage("sourceLanguage", store: TranslatorState.preferencesStore) var sourceLanguage: String = "fr" {
+        didSet { log.info("Source language changed: \(oldValue) -> \(sourceLanguage)", category: .settings) }
+    }
+    @AppStorage("targetLanguage", store: TranslatorState.preferencesStore) var targetLanguage: String = "en" {
+        didSet { log.info("Target language changed: \(oldValue) -> \(targetLanguage)", category: .settings) }
+    }
     
     // MARK: Appearance Settings
     
-    @AppStorage("overlayOpacity", store: TranslatorState.preferencesStore) var overlayOpacity: Double = 0.95
-    @AppStorage("fontSize", store: TranslatorState.preferencesStore) var fontSize: Double = 20
-    @AppStorage("interactionMode", store: TranslatorState.preferencesStore) var interactionModeRaw: Int = 0  // 0=click, 1=hover
-    @AppStorage("alwaysOnTop", store: TranslatorState.preferencesStore) var alwaysOnTop: Bool = true  // Keep overlay above all windows
+    @AppStorage("overlayOpacity", store: TranslatorState.preferencesStore) var overlayOpacity: Double = 0.95 {
+        didSet { log.info("Overlay opacity: \(String(format: "%.0f", overlayOpacity * 100))%", category: .settings) }
+    }
+    @AppStorage("fontSize", store: TranslatorState.preferencesStore) var fontSize: Double = 20 {
+        didSet { log.info("Font size: \(Int(fontSize))pt", category: .settings) }
+    }
+    @AppStorage("interactionMode", store: TranslatorState.preferencesStore) var interactionModeRaw: Int = 0 {  // 0=click, 1=hover
+        didSet { 
+            let mode = InteractionMode(rawValue: interactionModeRaw)?.name ?? "Unknown"
+            log.info("Interaction mode: \(mode)", category: .settings) 
+        }
+    }
+    @AppStorage("alwaysOnTop", store: TranslatorState.preferencesStore) var alwaysOnTop: Bool = true {  // Keep overlay above all windows
+        didSet { log.info("Always on top: \(alwaysOnTop ? "enabled" : "disabled")", category: .settings) }
+    }
     
     // MARK: Keyboard Shortcuts
     
-    @AppStorage("hotkeyKeyCode", store: TranslatorState.preferencesStore) var hotkeyKeyCode: Int = 17  // 'T' key
-    @AppStorage("hotkeyModifiers", store: TranslatorState.preferencesStore) var hotkeyModifiers: Int = 0x101000  // Cmd+Ctrl
+    @AppStorage("hotkeyKeyCode", store: TranslatorState.preferencesStore) var hotkeyKeyCode: Int = 17 {  // 'T' key
+        didSet { log.info("Hotkey changed: \(hotkeyDisplayString)", category: .settings) }
+    }
+    @AppStorage("hotkeyModifiers", store: TranslatorState.preferencesStore) var hotkeyModifiers: Int = 0x101000 {  // Cmd+Ctrl
+        didSet { log.info("Hotkey changed: \(hotkeyDisplayString)", category: .settings) }
+    }
     
     var hotkeyDisplayString: String {
         var parts: [String] = []
         let mods = UInt(hotkeyModifiers)
+        if mods & UInt(NSEvent.ModifierFlags.command.rawValue) != 0 { parts.append("⌘") }
         if mods & UInt(NSEvent.ModifierFlags.control.rawValue) != 0 { parts.append("⌃") }
         if mods & UInt(NSEvent.ModifierFlags.option.rawValue) != 0 { parts.append("⌥") }
         if mods & UInt(NSEvent.ModifierFlags.shift.rawValue) != 0 { parts.append("⇧") }
-        if mods & UInt(NSEvent.ModifierFlags.command.rawValue) != 0 { parts.append("⌘") }
         
-        let keyName = keyCodeToString(hotkeyKeyCode)
-        parts.append(keyName)
+        // Convert key code to character
+        let keyChar: String
+        switch hotkeyKeyCode {
+        case 0: keyChar = "A"
+        case 1: keyChar = "S"
+        case 2: keyChar = "D"
+        case 3: keyChar = "F"
+        case 4: keyChar = "H"
+        case 5: keyChar = "G"
+        case 6: keyChar = "Z"
+        case 7: keyChar = "X"
+        case 8: keyChar = "C"
+        case 9: keyChar = "V"
+        case 11: keyChar = "B"
+        case 12: keyChar = "Q"
+        case 13: keyChar = "W"
+        case 14: keyChar = "E"
+        case 15: keyChar = "R"
+        case 16: keyChar = "Y"
+        case 17: keyChar = "T"
+        case 31: keyChar = "O"
+        case 32: keyChar = "U"
+        case 34: keyChar = "I"
+        case 35: keyChar = "P"
+        case 37: keyChar = "L"
+        case 38: keyChar = "J"
+        case 40: keyChar = "K"
+        case 45: keyChar = "N"
+        case 46: keyChar = "M"
+        case 49: keyChar = "Space"
+        default: keyChar = "\(hotkeyKeyCode)"
+        }
+        parts.append(keyChar)
         return parts.joined()
-    }
-    
-    private func keyCodeToString(_ keyCode: Int) -> String {
-        let keyMap: [Int: String] = [
-            0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X", 8: "C", 9: "V",
-            11: "B", 12: "Q", 13: "W", 14: "E", 15: "R", 16: "Y", 17: "T", 18: "1", 19: "2",
-            20: "3", 21: "4", 22: "6", 23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8",
-            29: "0", 31: "O", 32: "U", 34: "I", 35: "P", 37: "L", 38: "J", 40: "K", 45: "N", 46: "M",
-            49: "Space", 36: "↩", 48: "⇥", 51: "⌫", 53: "⎋"
-        ]
-        return keyMap[keyCode] ?? "?"
     }
     
     var interactionMode: InteractionMode {
         get { InteractionMode(rawValue: interactionModeRaw) ?? .click }
-        set { 
-            interactionModeRaw = newValue.rawValue
-            objectWillChange.send()
-        }
+        set { interactionModeRaw = newValue.rawValue }
     }
     
-    // Convenience property for backward compatibility
-    var hideOnHover: Bool { interactionMode == .hover }
+    var hideOnHover: Bool {
+        interactionMode == .hover
+    }
     
-    // Logging settings
+    // MARK: Logging Settings
+    
     @AppStorage("logFilePath", store: TranslatorState.preferencesStore) var logFilePath: String = "/tmp/overlay_translator.log"
-    @AppStorage("logLevel", store: TranslatorState.preferencesStore) var logLevelRaw: Int = 1  // 0=debug, 1=info, 2=warning, 3=error
-    @AppStorage("enableFileLogging", store: TranslatorState.preferencesStore) var enableFileLogging: Bool = true
+    @AppStorage("logLevel", store: TranslatorState.preferencesStore) var logLevelRaw: Int = 1 {  // 0=debug, 1=info, 2=warning, 3=error
+        didSet { 
+            let level = LogLevel(rawValue: logLevelRaw)?.label ?? "Unknown"
+            log.info("Log level: \(level)", category: .settings) 
+        }
+    }
+    @AppStorage("enableFileLogging", store: TranslatorState.preferencesStore) var enableFileLogging: Bool = true {
+        didSet { log.info("File logging: \(enableFileLogging ? "enabled" : "disabled")", category: .settings) }
+    }
     
     var logLevel: LogLevel {
         get { LogLevel(rawValue: logLevelRaw) ?? .info }
         set { logLevelRaw = newValue.rawValue }
     }
     
-    // Translation settings
-    @AppStorage("translationService", store: TranslatorState.preferencesStore) var translationServiceRaw: Int = 0  // 0=apple, 1=ltEngine, 2=google
+    // MARK: Translation Service Settings
+    
+    @AppStorage("translationService", store: TranslatorState.preferencesStore) var translationServiceRaw: Int = 0 {  // 0=apple, 1=ltEngine, 2=google
+        didSet { 
+            let serviceName = TranslationServiceType(rawValue: translationServiceRaw)?.name ?? "Unknown"
+            log.info("Translation service changed: \(serviceName)", category: .settings) 
+        }
+    }
     @AppStorage("customApiUrl", store: TranslatorState.preferencesStore) var customApiUrl: String = ""
     @AppStorage("googleApiKey", store: TranslatorState.preferencesStore) var googleApiKey: String = ""  // Optional API key for Google Translate
     
-    // LTEngine / LibreTranslate settings
-    @AppStorage("libreTranslateUrl", store: TranslatorState.preferencesStore) var libreTranslateUrl: String = "http://localhost:5000/translate"
+    // LibreTranslate/LTEngine settings
+    @AppStorage("libreTranslateUrl", store: TranslatorState.preferencesStore) var libreTranslateUrl: String = "http://localhost:5000/translate" {
+        didSet { log.info("LibreTranslate URL changed: \(libreTranslateUrl)", category: .settings) }
+    }
     @AppStorage("libreTranslateApiKey", store: TranslatorState.preferencesStore) var libreTranslateApiKey: String = ""  // Optional API key
     
-    // LLM (OpenAI GPT / Claude / Gemini) settings
-    @AppStorage("llmApiUrl", store: TranslatorState.preferencesStore) var llmApiUrl: String = "https://api.openai.com/v1/chat/completions"
-    @AppStorage("llmModel", store: TranslatorState.preferencesStore) var llmModel: String = "gpt-4.1-mini"
+    // LLM settings
+    @AppStorage("llmApiUrl", store: TranslatorState.preferencesStore) var llmApiUrl: String = "https://api.openai.com/v1/chat/completions" {
+        didSet { log.info("LLM API URL changed: \(llmApiUrl)", category: .settings) }
+    }
+    @AppStorage("llmModel", store: TranslatorState.preferencesStore) var llmModel: String = "gpt-4.1-mini" {
+        didSet { log.info("LLM model changed: \(llmModel)", category: .settings) }
+    }
     
-    // Separate API keys for each provider
+    // API Keys for different LLM providers
     @AppStorage("openaiApiKey", store: TranslatorState.preferencesStore) var openaiApiKey: String = ""
     @AppStorage("anthropicApiKey", store: TranslatorState.preferencesStore) var anthropicApiKey: String = ""
     @AppStorage("geminiApiKey", store: TranslatorState.preferencesStore) var geminiApiKey: String = ""
     @AppStorage("ollamaApiKey", store: TranslatorState.preferencesStore) var ollamaApiKey: String = ""  // Usually not needed
     @AppStorage("otherLlmApiKey", store: TranslatorState.preferencesStore) var otherLlmApiKey: String = ""
     
-    // Get the API key for the current provider
+    var translationService: TranslationServiceType {
+        get { TranslationServiceType(rawValue: translationServiceRaw) ?? .apple }
+        set { translationServiceRaw = newValue.rawValue }
+    }
+    
+    // Legacy compatibility properties for TranslationService
+    var useAppleTranslation: Bool { translationService == .apple }
+    var useLibreTranslate: Bool { translationService == .ltEngine }
+    var useLLM: Bool { translationService == .llm }
+    
+    // MARK: LLM Provider Detection
+    
+    var detectedLLMProvider: LLMProvider {
+        let url = llmApiUrl.lowercased()
+        if url.contains("anthropic.com") || url.contains("claude") {
+            return .anthropic
+        } else if url.contains("openai.com") || url.contains("gpt") {
+            return .openai
+        } else if url.contains("generativelanguage.googleapis.com") || url.contains("gemini") {
+            return .gemini
+        } else if url.contains("localhost:11434") || url.contains("ollama") {
+            return .ollama
+        } else {
+            return .other
+        }
+    }
+    
     var currentLlmApiKey: String {
         get {
             switch detectedLLMProvider {
@@ -297,40 +237,112 @@ class TranslatorState: ObservableObject {
         }
     }
     
-    // Detect LLM provider from URL
-    var detectedLLMProvider: LLMProvider {
-        let url = llmApiUrl.lowercased()
-        if url.contains("anthropic") {
-            return .anthropic
-        } else if url.contains("generativelanguage.googleapis") || url.contains("gemini") {
-            return .gemini
-        } else if url.contains("openai") {
-            return .openai
-        } else if url.contains("localhost") || url.contains("127.0.0.1") || url.contains("ollama") {
-            return .ollama
-        }
-        return .other
+    // MARK: Advanced Settings
+    
+    @AppStorage("forceSerbianLatin", store: TranslatorState.preferencesStore) var forceSerbianLatin: Bool = true {  // Convert Cyrillic to Latin for Serbian
+        didSet { log.info("Force Serbian Latin: \(forceSerbianLatin ? "enabled" : "disabled")", category: .settings) }
     }
     
-    // Computed property to get the base URL for LTEngine (removes /translate suffix if present)
+    // MARK: Performance Settings
+    
+    @AppStorage("captureInterval", store: TranslatorState.preferencesStore) var captureInterval: Double = 0.05 {  // 50ms default - how often to capture screen
+        didSet { log.info("Capture interval: \(Int(captureInterval * 1000))ms", category: .settings) }
+    }
+    @AppStorage("stabilityThreshold", store: TranslatorState.preferencesStore) var stabilityThreshold: Double = 15 {  // px - movement below this is ignored to prevent jitter
+        didSet { log.info("Stability threshold: \(Int(stabilityThreshold))px", category: .settings) }
+    }
+    @AppStorage("maxCacheSize", store: TranslatorState.preferencesStore) var maxCacheSize: Int = 500 {  // max translations to cache
+        didSet { log.info("Max cache size: \(maxCacheSize) entries", category: .settings) }
+    }
+    @AppStorage("cacheFilePath", store: TranslatorState.preferencesStore) var cacheFilePath: String = "" {  // empty = use default
+        didSet { log.info("Cache file path: \(cacheFilePath.isEmpty ? "default" : cacheFilePath)", category: .settings) }
+    }
+    @AppStorage("enableCachePersistence", store: TranslatorState.preferencesStore) var enableCachePersistence: Bool = true {
+        didSet { log.info("Cache persistence: \(enableCachePersistence ? "enabled" : "disabled")", category: .settings) }
+    }  // save/load cache on app start/stop
+    
+    var effectiveCacheFilePath: String {
+        if cacheFilePath.isEmpty {
+            // Default path: ~/Library/Application Support/ScreenLingo/cache.json
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let appDir = appSupport.appendingPathComponent("ScreenLingo")
+            return appDir.appendingPathComponent("translation_cache.json").path
+        }
+        return cacheFilePath
+    }
+    
+    // MARK: API & Network Settings
+    
+    @AppStorage("rateLimitBackoff", store: TranslatorState.preferencesStore) var rateLimitBackoff: Double = 3.0 {
+        didSet { log.info("Rate limit backoff: \(rateLimitBackoff)s", category: .settings) }
+    }  // seconds to wait after rate limit error
+    @AppStorage("apiTimeout", store: TranslatorState.preferencesStore) var apiTimeout: Double = 30.0 {  // API request timeout in seconds
+        didSet { log.info("API timeout: \(apiTimeout)s", category: .settings) }
+    }
+    @AppStorage("languageFetchCooldown", store: TranslatorState.preferencesStore) var languageFetchCooldown: Double = 30.0 {  // seconds before retrying language fetch
+        didSet { log.info("Language fetch cooldown: \(languageFetchCooldown)s", category: .settings) }
+    }
+    @AppStorage("maxConcurrentTranslations", store: TranslatorState.preferencesStore) var maxConcurrentTranslations: Int = 3 {  // max parallel API calls
+        didSet { log.info("Max concurrent translations: \(maxConcurrentTranslations)", category: .settings) }
+    }
+    @AppStorage("translationDelay", store: TranslatorState.preferencesStore) var translationDelay: Double = 0.1 {  // seconds between translation requests
+        didSet { log.info("Translation delay: \(Int(translationDelay * 1000))ms", category: .settings) }
+    }
+    
+    // MARK: OCR Settings
+    
+    @AppStorage("ocrAccurate", store: TranslatorState.preferencesStore) var ocrAccurate: Bool = true {  // true=accurate (slower), false=fast
+        didSet { log.info("OCR mode: \(ocrAccurate ? "accurate" : "fast")", category: .settings) }
+    }
+    @AppStorage("minTextLength", store: TranslatorState.preferencesStore) var minTextLength: Int = 3 {  // minimum characters to translate
+        didSet { log.info("Min text length: \(minTextLength) chars", category: .settings) }
+    }
+    @AppStorage("minLetterCount", store: TranslatorState.preferencesStore) var minLetterCount: Int = 2 {  // minimum letters required in text
+        didSet { log.info("Min letter count: \(minLetterCount)", category: .settings) }
+    }
+    
+    // MARK: Text Grouping Settings
+    
+    @AppStorage("textGrouping", store: TranslatorState.preferencesStore) var textGrouping: Double = 1.0 {  // 0.5=strict, 1.0=normal, 2.0=aggressive
+        didSet { log.info("Text grouping: \(String(format: "%.1f", textGrouping))", category: .settings) }
+    }
+    @AppStorage("maxBubbleWidth", store: TranslatorState.preferencesStore) var maxBubbleWidth: Double = 0.30 {  // maximum bubble width (0-1, percentage of screen)
+        didSet { log.info("Max bubble width: \(String(format: "%.0f", maxBubbleWidth * 100))%", category: .settings) }
+    }
+    @AppStorage("maxBubbleHeight", store: TranslatorState.preferencesStore) var maxBubbleHeight: Double = 0.35 {  // maximum bubble height (0-1, percentage of screen)
+        didSet { log.info("Max bubble height: \(String(format: "%.0f", maxBubbleHeight * 100))%", category: .settings) }
+    }
+    @AppStorage("horizontalGapThreshold", store: TranslatorState.preferencesStore) var horizontalGapThreshold: Double = 0.03 {  // horizontal gap to separate bubbles (0-1)
+        didSet { log.info("Horizontal gap threshold: \(String(format: "%.0f", horizontalGapThreshold * 100))%", category: .settings) }
+    }
+    @AppStorage("verticalGapMultiplier", store: TranslatorState.preferencesStore) var verticalGapMultiplier: Double = 2.5 {  // vertical gap multiplier for grouping
+        didSet { log.info("Vertical gap multiplier: \(String(format: "%.1f", verticalGapMultiplier))", category: .settings) }
+    }
+    @AppStorage("centerAlignmentThreshold", store: TranslatorState.preferencesStore) var centerAlignmentThreshold: Double = 0.05 {  // center alignment tolerance (0-1)
+        didSet { log.info("Center alignment threshold: \(String(format: "%.0f", centerAlignmentThreshold * 100))%", category: .settings) }
+    }
+    
+    // MARK: Computed Properties for LTEngine
+    
     var ltEngineBaseUrl: String {
         var url = libreTranslateUrl.trimmingCharacters(in: .whitespaces)
+        // Remove /translate suffix to get base URL
         if url.hasSuffix("/translate") {
             url = String(url.dropLast("/translate".count))
         }
         if url.hasSuffix("/") {
             url = String(url.dropLast())
         }
-        return url.isEmpty ? "http://localhost:5000" : url
+        return url
     }
     
-    // Check if we should retry fetching LTEngine languages
     private var canRetryLTEngineFetch: Bool {
         guard let lastAttempt = lastLTEngineFetchAttempt else { return true }
-        return Date().timeIntervalSince(lastAttempt) >= ltEngineFetchCooldown
+        return Date().timeIntervalSince(lastAttempt) >= languageFetchCooldown
     }
     
-    // Fetch available languages from LTEngine server
+    // MARK: LTEngine Language Fetching
+    
     func fetchLTEngineLanguages(force: Bool = false) {
         guard !isLoadingLTEngineLanguages else { return }
         
@@ -399,7 +411,7 @@ class TranslatorState: ObservableObject {
         fetchLTEngineLanguages(force: true)
     }
     
-    // MARK: - Google Translate Custom API Languages
+    // MARK: Google Translate Custom API
     
     // Computed property to get the base URL for Google custom API
     var googleBaseUrl: String {
@@ -422,7 +434,7 @@ class TranslatorState: ObservableObject {
     // Check if we should retry fetching Google languages
     private var canRetryGoogleFetch: Bool {
         guard let lastAttempt = lastGoogleFetchAttempt else { return true }
-        return Date().timeIntervalSince(lastAttempt) >= googleFetchCooldown
+        return Date().timeIntervalSince(lastAttempt) >= languageFetchCooldown
     }
     
     // Check if custom Google API is configured
@@ -471,7 +483,7 @@ class TranslatorState: ObservableObject {
         Task {
             do {
                 var request = URLRequest(url: url)
-                request.timeoutInterval = 15
+                request.timeoutInterval = apiTimeout
                 
                 // Also add API key as header for services that expect it there
                 if !googleApiKey.isEmpty {
@@ -500,9 +512,7 @@ class TranslatorState: ObservableObject {
                     return
                 }
                 
-                // Try Google Cloud Translation API v3 format:
-                // {"languages": [{"languageCode": "en", "displayName": "English", "supportSource": true, "supportTarget": true}]}
-                // Reference: https://docs.cloud.google.com/translate/docs/reference/rest/v3/projects/getSupportedLanguages
+                // Try Google Cloud Translation API v3 format
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let languagesArray = json["languages"] as? [[String: Any]] {
                     let languageTuples = languagesArray.compactMap { lang -> (String, String)? in
@@ -520,7 +530,7 @@ class TranslatorState: ObservableObject {
                     }
                 }
                 
-                // Try Google Cloud v2 format: {"data": {"languages": [{"language": "en", "name": "English"}]}}
+                // Try Google Cloud v2 format
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let dataObj = json["data"] as? [String: Any],
                    let languagesArray = dataObj["languages"] as? [[String: Any]] {
@@ -539,7 +549,7 @@ class TranslatorState: ObservableObject {
                     }
                 }
                 
-                // Try simple array format: [{"language": "en"}, ...] or [{"code": "en"}, ...]
+                // Try simple array format
                 if let languagesArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                     let languageTuples = languagesArray.compactMap { lang -> (String, String)? in
                         let code = lang["language"] as? String ?? lang["code"] as? String ?? lang["languageCode"] as? String
@@ -592,153 +602,7 @@ class TranslatorState: ObservableObject {
         fetchGoogleLanguages(force: true)
     }
     
-    // Computed property for translation service
-    var translationService: TranslationServiceType {
-        get { TranslationServiceType(rawValue: translationServiceRaw) ?? .apple }
-        set { 
-            translationServiceRaw = newValue.rawValue
-            // Auto-switch to supported language if current one isn't supported
-            // Also reset "auto" if new service doesn't support auto detect
-            if sourceLanguage == "auto" && !newValue.supportsAutoDetect {
-                sourceLanguage = "en"
-            } else if !newValue.isLanguageSupported(sourceLanguage) {
-                sourceLanguage = "en"
-            }
-            if !newValue.isLanguageSupported(targetLanguage) {
-                targetLanguage = "en"
-            }
-            // Fetch languages when service is selected
-            if newValue == .ltEngine && ltEngineLanguages.isEmpty {
-                fetchLTEngineLanguages()
-            }
-            if newValue == .google && hasCustomGoogleApi && googleLanguages.isEmpty {
-                fetchGoogleLanguages()
-            }
-            objectWillChange.send()
-        }
-    }
-    
-    // Convenience properties for backward compatibility
-    var useLibreTranslate: Bool { translationService == .ltEngine }
-    var useAppleTranslation: Bool { translationService == .apple }
-    var useLLM: Bool { translationService == .llm }
-    
-    // Script/transliteration settings
-    @AppStorage("forceSerbianLatin", store: TranslatorState.preferencesStore) var forceSerbianLatin: Bool = true  // Convert Cyrillic to Latin for Serbian
-    
-    // Performance settings
-    @AppStorage("captureInterval", store: TranslatorState.preferencesStore) var captureInterval: Double = 0.05  // 50ms default - how often to capture screen
-    @AppStorage("stabilityThreshold", store: TranslatorState.preferencesStore) var stabilityThreshold: Double = 15  // px - movement below this is ignored to prevent jitter
-    @AppStorage("ocrAccurate", store: TranslatorState.preferencesStore) var ocrAccurate: Bool = true  // true=accurate (slower), false=fast
-    @AppStorage("maxCacheSize", store: TranslatorState.preferencesStore) var maxCacheSize: Int = 500  // max translations to cache
-    @AppStorage("minTextLength", store: TranslatorState.preferencesStore) var minTextLength: Int = 3  // minimum characters to translate
-    @AppStorage("textGrouping", store: TranslatorState.preferencesStore) var textGrouping: Double = 1.0  // 0.5=strict, 1.0=normal, 2.0=aggressive
-    
-    // MARK: Excluded Apps
-    
-    // Excluded apps - stored as comma-separated bundle IDs
-    @AppStorage("excludedApps", store: TranslatorState.preferencesStore) private var excludedAppsString: String = "com.todesktop.230313mzl4w4u92,com.microsoft.VSCode,com.apple.dt.Xcode"
-    
-    var excludedApps: [String] {
-        get {
-            excludedAppsString.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
-        }
-        set {
-            excludedAppsString = newValue.joined(separator: ",")
-        }
-    }
-    
-    func isAppExcluded(_ bundleIdentifier: String?) -> Bool {
-        guard let bundleId = bundleIdentifier else { return false }
-        return excludedApps.contains { bundleId.lowercased().contains($0.lowercased()) }
-    }
-    
-    func addExcludedApp(_ bundleId: String) {
-        var apps = excludedApps
-        let normalized = bundleId.trimmingCharacters(in: .whitespaces)
-        if !normalized.isEmpty && !apps.contains(normalized) {
-            apps.append(normalized)
-            excludedApps = apps
-            objectWillChange.send()
-        }
-    }
-    
-    func removeExcludedApp(_ bundleId: String) {
-        var apps = excludedApps
-        apps.removeAll { $0 == bundleId }
-        excludedApps = apps
-        objectWillChange.send()
-    }
-    
-    // MARK: Ignore Patterns
-    
-    @AppStorage("ignoredPatterns", store: TranslatorState.preferencesStore) private var ignoredPatternsString: String = ""
-    
-    var ignoredPatterns: [String] {
-        get {
-            ignoredPatternsString.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces).lowercased() }
-        }
-        set {
-            ignoredPatternsString = newValue.joined(separator: ",")
-        }
-    }
-    
-    func addIgnoredPattern(_ pattern: String) {
-        var patterns = ignoredPatterns
-        let normalized = pattern.trimmingCharacters(in: .whitespaces).lowercased()
-        if !normalized.isEmpty && !patterns.contains(normalized) {
-            patterns.append(normalized)
-            ignoredPatterns = patterns
-            objectWillChange.send()
-        }
-    }
-    
-    func removeIgnoredPattern(_ pattern: String) {
-        var patterns = ignoredPatterns
-        patterns.removeAll { $0 == pattern.lowercased() }
-        ignoredPatterns = patterns
-        objectWillChange.send()
-    }
-    
-    func shouldIgnoreText(_ text: String) -> Bool {
-        let lowercased = text.lowercased()
-        return ignoredPatterns.contains { pattern in
-            lowercased.contains(pattern)
-        }
-    }
-    
-    // MARK: Static Language Data
-    
-    /// Default supported languages - matches Apple Translation (macOS 15+)
-    /// Additional languages like Serbian Latin are included for other services
-    static let supportedLanguages: [(code: String, name: String)] = [
-        ("ar", "Arabic"),
-        ("bs", "Bosnian"),
-        ("zh", "Chinese"),
-        ("zh-Hans", "Chinese (Simplified)"),
-        ("zh-Hant", "Chinese (Traditional)"),
-        ("hr", "Croatian"),
-        ("nl", "Dutch"),
-        ("en", "English"),
-        ("fr", "French"),
-        ("de", "German"),
-        ("hi", "Hindi"),
-        ("id", "Indonesian"),
-        ("it", "Italian"),
-        ("ja", "Japanese"),
-        ("ko", "Korean"),
-        ("pl", "Polish"),
-        ("pt", "Portuguese"),
-        ("pt-BR", "Portuguese (Brazil)"),
-        ("ru", "Russian"),
-        ("sr", "Serbian (Cyrillic)"),
-        ("sr-Latn", "Serbian (Latin)"),
-        ("es", "Spanish"),
-        ("th", "Thai"),
-        ("tr", "Turkish"),
-        ("uk", "Ukrainian"),
-        ("vi", "Vietnamese")
-    ]
+    // MARK: Language Utilities
     
     func languageName(for code: String) -> String {
         if code == "auto" { return "Auto Detect" }
@@ -749,7 +613,7 @@ class TranslatorState: ObservableObject {
         if translationService == .google && hasCustomGoogleApi, let lang = googleLanguages.first(where: { $0.code == code }) {
             return lang.name
         }
-        return Self.supportedLanguages.first { $0.code == code }?.name ?? code.uppercased()
+        return StaticLanguageData.languageName(for: code)
     }
     
     // Get languages filtered by current translation service
@@ -765,7 +629,7 @@ class TranslatorState: ObservableObject {
                 fetchLTEngineLanguages()
             }
             // Return static list as fallback while loading or on error
-            return Self.supportedLanguages
+            return StaticLanguageData.supportedLanguages
         case .google:
             // Use fetched languages from custom Google API if configured
             if hasCustomGoogleApi {
@@ -778,12 +642,12 @@ class TranslatorState: ObservableObject {
                 }
             }
             // Return static list as fallback
-            return Self.supportedLanguages
+            return StaticLanguageData.supportedLanguages
         case .apple:
-            return Self.supportedLanguages.filter { translationService.isLanguageSupported($0.code) }
+            return StaticLanguageData.supportedLanguages.filter { translationService.isLanguageSupported($0.code) }
         case .llm:
             // LLMs can translate to/from any language
-            return Self.supportedLanguages
+            return StaticLanguageData.supportedLanguages
         }
     }
     
@@ -804,5 +668,19 @@ class TranslatorState: ObservableObject {
         sourceLanguage = targetLanguage
         targetLanguage = temp
         objectWillChange.send()
+    }
+    
+    // MARK: Manager Delegate Methods
+    
+    func isAppExcluded(_ bundleIdentifier: String?) -> Bool {
+        excludedAppsManager.isAppExcluded(bundleIdentifier)
+    }
+    
+    func shouldIgnoreText(_ text: String) -> Bool {
+        ignorePatternManager.shouldIgnoreText(text)
+    }
+    
+    func addIgnoredPattern(_ pattern: String) {
+        ignorePatternManager.addIgnoredPattern(pattern)
     }
 }

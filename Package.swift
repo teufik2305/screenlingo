@@ -13,6 +13,11 @@ let package = Package(
         .executableTarget(
             name: "OverlayTranslator",
             path: "Sources"
+        ),
+        .testTarget(
+            name: "OverlayTranslatorTests",
+            dependencies: ["OverlayTranslator"],
+            path: "Tests"
         )
     ]
 )
