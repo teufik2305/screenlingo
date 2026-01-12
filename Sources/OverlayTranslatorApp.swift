@@ -40,6 +40,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var accessibilityTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     
+    // Multi-monitor support: track current target screen
+    private var currentTargetScreen: NSScreen?
+    
     @Published var isTranslating = false
     @Published var hiddenOverlays: [(original: String, translated: String)] = []
     
@@ -187,6 +190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         isTranslating = true
         
         guard let screen = NSScreen.main else { return }
+        currentTargetScreen = screen
         
         let window = NSWindow(
             contentRect: screen.frame,
@@ -219,6 +223,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 self?.hiddenOverlays = hiddenList
             }
         )
+        overlayView.targetScreen = screen
         window.contentView = overlayView
         window.orderFrontRegardless()
         
@@ -229,9 +234,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             sourceLanguage: translatorState.sourceLanguage,
             targetLanguage: translatorState.targetLanguage,
             translatorState: translatorState,
-            onUpdate: { [weak self] textBlocks in
+            onUpdate: { [weak self] textBlocks, targetScreen in
                 DispatchQueue.main.async {
-                    self?.overlayView?.updateTextBlocks(textBlocks)
+                    self?.handleOverlayUpdate(textBlocks: textBlocks, targetScreen: targetScreen)
                 }
             },
             onClear: { [weak self] in
@@ -246,6 +251,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         translationEngine?.start()
     }
     
+    /// Handle overlay updates with multi-monitor support
+    private func handleOverlayUpdate(textBlocks: [TranslatedTextBlock], targetScreen: NSScreen?) {
+        // If multi-monitor is enabled and screen changed, move overlay window
+        if translatorState.multiMonitorEnabled,
+           let newScreen = targetScreen,
+           newScreen != currentTargetScreen {
+            moveOverlayToScreen(newScreen)
+        }
+        
+        overlayView?.updateTextBlocks(textBlocks)
+    }
+    
+    /// Move the overlay window to a different screen
+    private func moveOverlayToScreen(_ screen: NSScreen) {
+        guard let window = overlayWindow else { return }
+        
+        log.info("Moving overlay to screen: \(screen.localizedName)", category: .ui)
+        
+        currentTargetScreen = screen
+        overlayView?.targetScreen = screen
+        
+        // Update window frame to cover the target screen
+        window.setFrame(screen.frame, display: true, animate: false)
+        
+        // Also update the overlay view's frame
+        overlayView?.frame = CGRect(origin: .zero, size: screen.frame.size)
+        
+        // Clear stable positions since we moved screens
+        overlayView?.clearBlocks()
+    }
+    
     func stopTranslation() {
         isTranslating = false
         translationEngine?.stop()
@@ -254,6 +290,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         overlayWindow = nil
         overlayView = nil
         hiddenOverlays = []
+        currentTargetScreen = nil
     }
     
     private func updateOverlayWindowLevel(alwaysOnTop: Bool) {
@@ -402,12 +439,18 @@ class SettingsWindowController {
     func showWindow() {
         if window == nil {
             let settingsView = SettingsView(state: state)
+                .frame(minWidth: 400, maxWidth: .infinity, minHeight: 500, maxHeight: .infinity)
             let hostingController = NSHostingController(rootView: settingsView)
+            
+            // Allow the hosting view to resize
+            hostingController.view.setFrameSize(NSSize(width: 500, height: 700))
             
             let window = NSWindow(contentViewController: hostingController)
             window.title = "Settings"
-            window.styleMask = [.titled, .closable]
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.level = .normal
+            window.setContentSize(NSSize(width: 500, height: 700))
+            window.minSize = NSSize(width: 400, height: 500)
             window.center()
             window.isReleasedWhenClosed = false
             window.setFrameAutosaveName("SettingsWindow")

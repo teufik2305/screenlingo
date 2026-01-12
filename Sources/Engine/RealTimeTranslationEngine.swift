@@ -13,7 +13,7 @@ class RealTimeTranslationEngine {
     private let sourceLanguage: String
     private let targetLanguage: String
     private let translatorState: TranslatorState
-    private let onUpdate: ([TranslatedTextBlock]) -> Void
+    private let onUpdate: ([TranslatedTextBlock], NSScreen?) -> Void  // Includes target screen for multi-monitor
     private let onClear: () -> Void
     private let onPermissionError: (() -> Void)?
     
@@ -42,7 +42,10 @@ class RealTimeTranslationEngine {
     // Rate limit handling
     private var lastRateLimitTime: Date?
     
-    init(sourceLanguage: String, targetLanguage: String, translatorState: TranslatorState, onUpdate: @escaping ([TranslatedTextBlock]) -> Void, onClear: @escaping () -> Void = {}, onPermissionError: (() -> Void)? = nil) {
+    // Multi-monitor support: track current screen
+    private var currentScreen: NSScreen?
+    
+    init(sourceLanguage: String, targetLanguage: String, translatorState: TranslatorState, onUpdate: @escaping ([TranslatedTextBlock], NSScreen?) -> Void, onClear: @escaping () -> Void = {}, onPermissionError: (() -> Void)? = nil) {
         self.sourceLanguage = sourceLanguage
         self.targetLanguage = targetLanguage
         self.translatorState = translatorState
@@ -191,6 +194,9 @@ class RealTimeTranslationEngine {
                 lastWindowPID = captureResult.processID
                 lastAppName = captureResult.appName
                 
+                // Track screen changes for multi-monitor support
+                currentScreen = captureResult.screen
+                
                 log.windowCaptured(app: captureResult.appName, size: captureResult.bounds.size)
                 
                 let currentHash = windowCapture.hashImage(captureResult.image)
@@ -212,7 +218,7 @@ class RealTimeTranslationEngine {
                 
                 if !cachedBlocks.isEmpty {
                     // Update overlay with cached translations immediately
-                    onUpdate(cachedBlocks)
+                    onUpdate(cachedBlocks, currentScreen)
                 }
                 
                 // Slow path: translate new texts (only if not already translating)
@@ -232,7 +238,7 @@ class RealTimeTranslationEngine {
                     if !newBlocks.isEmpty {
                         log.blocksCreated(newBlocks.count)
                         // Merge with cached blocks for complete update
-                        onUpdate(cachedBlocks + newBlocks)
+                        onUpdate(cachedBlocks + newBlocks, currentScreen)
                     }
                 }
                 

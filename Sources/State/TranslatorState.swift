@@ -77,6 +77,51 @@ class TranslatorState: ObservableObject {
         didSet { log.info("Always on top: \(alwaysOnTop ? "enabled" : "disabled")", category: .settings) }
     }
     
+    // Overlay display mode: 0 = box (white background), 1 = outline (text with stroke)
+    @AppStorage("overlayDisplayMode", store: TranslatorState.preferencesStore) var overlayDisplayMode: Int = 0 {
+        didSet { log.info("Overlay display mode: \(overlayDisplayMode == 0 ? "box" : "outline")", category: .settings) }
+    }
+    
+    // Outline settings
+    @AppStorage("outlineWidth", store: TranslatorState.preferencesStore) var outlineWidth: Double = 2.0 {
+        didSet { log.info("Outline width: \(outlineWidth)px", category: .settings) }
+    }
+    @AppStorage("outlineColor", store: TranslatorState.preferencesStore) var outlineColorHex: String = "#000000" {
+        didSet { log.info("Outline color: \(outlineColorHex)", category: .settings) }
+    }
+    @AppStorage("textColor", store: TranslatorState.preferencesStore) var textColorHex: String = "#FFFFFF" {
+        didSet { log.info("Text color: \(textColorHex)", category: .settings) }
+    }
+    
+    // Box mode settings
+    @AppStorage("boxPaddingH", store: TranslatorState.preferencesStore) var boxPaddingH: Double = 12 {
+        didSet { log.info("Box horizontal padding: \(boxPaddingH)px", category: .settings) }
+    }
+    @AppStorage("boxPaddingV", store: TranslatorState.preferencesStore) var boxPaddingV: Double = 8 {
+        didSet { log.info("Box vertical padding: \(boxPaddingV)px", category: .settings) }
+    }
+    @AppStorage("boxCornerRadius", store: TranslatorState.preferencesStore) var boxCornerRadius: Double = 5 {
+        didSet { log.info("Box corner radius: \(boxCornerRadius)px", category: .settings) }
+    }
+    @AppStorage("boxBackgroundColorHex", store: TranslatorState.preferencesStore) var boxBackgroundColorHex: String = "#FFFFFF" {
+        didSet { log.info("Box background color: \(boxBackgroundColorHex)", category: .settings) }
+    }
+    @AppStorage("boxTextColorHex", store: TranslatorState.preferencesStore) var boxTextColorHex: String = "#000000" {
+        didSet { log.info("Box text color: \(boxTextColorHex)", category: .settings) }
+    }
+    @AppStorage("boxBorderWidth", store: TranslatorState.preferencesStore) var boxBorderWidth: Double = 0 {
+        didSet { log.info("Box border width: \(boxBorderWidth)px", category: .settings) }
+    }
+    @AppStorage("boxBorderColorHex", store: TranslatorState.preferencesStore) var boxBorderColorHex: String = "#000000" {
+        didSet { log.info("Box border color: \(boxBorderColorHex)", category: .settings) }
+    }
+    @AppStorage("boxShadowEnabled", store: TranslatorState.preferencesStore) var boxShadowEnabled: Bool = true {
+        didSet { log.info("Box shadow: \(boxShadowEnabled ? "enabled" : "disabled")", category: .settings) }
+    }
+    @AppStorage("boxCoverOriginal", store: TranslatorState.preferencesStore) var boxCoverOriginal: Bool = true {
+        didSet { log.info("Box cover original text: \(boxCoverOriginal ? "enabled" : "disabled")", category: .settings) }
+    }
+    
     // MARK: Keyboard Shortcuts
     
     @AppStorage("hotkeyKeyCode", store: TranslatorState.preferencesStore) var hotkeyKeyCode: Int = 17 {  // 'T' key
@@ -293,6 +338,11 @@ class TranslatorState: ObservableObject {
     
     @AppStorage("ocrAccurate", store: TranslatorState.preferencesStore) var ocrAccurate: Bool = true {  // true=accurate (slower), false=fast
         didSet { log.info("OCR mode: \(ocrAccurate ? "accurate" : "fast")", category: .settings) }
+    }
+    
+    // Multi-monitor support
+    @AppStorage("multiMonitorEnabled", store: TranslatorState.preferencesStore) var multiMonitorEnabled: Bool = false {
+        didSet { log.info("Multi-monitor support: \(multiMonitorEnabled ? "enabled" : "disabled")", category: .settings) }
     }
     @AppStorage("minTextLength", store: TranslatorState.preferencesStore) var minTextLength: Int = 3 {  // minimum characters to translate
         didSet { log.info("Min text length: \(minTextLength) chars", category: .settings) }

@@ -8,6 +8,33 @@ struct AdvancedSettingsTab: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // Display (multi-monitor support)
+                settingsSection("Display") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: $state.multiMonitorEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Multi-Monitor Support")
+                                Text(state.multiMonitorEnabled 
+                                     ? "Overlay follows windows across all monitors" 
+                                     : "Overlay only shows on primary monitor")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        
+                        if state.multiMonitorEnabled {
+                            HStack(spacing: 8) {
+                                Image(systemName: "display.2")
+                                    .foregroundStyle(.secondary)
+                                Text("Connected displays: \(NSScreen.screens.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.leading, 20)
+                        }
+                    }
+                }
+                
                 // Performance (first section)
                 settingsSection("Performance") {
                     VStack(alignment: .leading, spacing: 12) {

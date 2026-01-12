@@ -50,6 +50,14 @@ Sources/
 2. Add UI control in appropriate `Settings/Tabs/*.swift`
 3. Add `didSet` logging if needed
 
+### Overlay Display Modes
+
+Two rendering modes in `RealTimeOverlayView.swift`:
+- **Box mode** (`drawBoxText`) - Rounded boxes with customizable background, padding, colors, border
+- **Outline mode** (`drawOutlinedText`) - Text with stroke outline (subtitle-style)
+
+Settings in `TranslatorState`: `overlayDisplayMode`, `boxPaddingH/V`, `boxCornerRadius`, `boxBackgroundColorHex`, etc.
+
 ### New Manager
 
 1. Create `State/Managers/YourManager.swift` as `ObservableObject`

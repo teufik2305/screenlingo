@@ -12,6 +12,9 @@ class RealTimeOverlayView: NSView {
     // Position stabilization - prevents "breathing" effect
     private var stablePositions: [String: CGRect] = [:]
     
+    // Multi-monitor support: the screen this overlay is displaying on
+    var targetScreen: NSScreen?
+    
     init(frame: NSRect, translatorState: TranslatorState, onIgnoreText: @escaping (String) -> Void, onHiddenChanged: @escaping ([(original: String, translated: String)]) -> Void = { _ in }) {
         self.translatorState = translatorState
         self.onIgnoreText = onIgnoreText
@@ -45,19 +48,59 @@ class RealTimeOverlayView: NSView {
         }
     }
     
-    // Simple: use the original bounding box for hit testing
+    /// Convert CG global coordinates to Cocoa global coordinates for hit testing
+    /// box: bounding box in CG global coordinates (origin at top-left of primary screen)
+    /// Returns: rect in Cocoa global coordinates for mouse hit testing
     private func getHitRect(_ block: TranslatedTextBlock, screenHeight: CGFloat) -> CGRect {
         let box = block.boundingBox
+        guard let primaryScreen = NSScreen.screens.first else {
+            return CGRect(
+                x: box.origin.x,
+                y: screenHeight - box.origin.y - box.height,
+                width: box.width,
+                height: box.height
+            )
+        }
+        
+        let primaryHeight = primaryScreen.frame.height
+        
+        // Convert CG global Y to Cocoa global Y
+        // CG: origin at top-left of primary, Y increases downward
+        // Cocoa: origin at bottom-left of primary, Y increases upward
+        let cocoaY = primaryHeight - box.origin.y - box.height
+        
+        // Return rect in Cocoa global coordinates (for mouse position comparison)
         return CGRect(
             x: box.origin.x,
-            y: screenHeight - box.origin.y - box.height,
+            y: cocoaY,
             width: box.width,
             height: box.height
         )
     }
     
+    /// Convert CG global coordinates to view-local coordinates for drawing
+    /// box: bounding box in CG global coordinates
+    /// Returns: center point in view-local coordinates
+    private func getLocalCenter(_ box: CGRect) -> CGPoint? {
+        guard let screen = targetScreen ?? NSScreen.main,
+              let primaryScreen = NSScreen.screens.first else {
+            return nil
+        }
+        
+        let primaryHeight = primaryScreen.frame.height
+        
+        // Convert CG global to Cocoa global
+        let cocoaMidY = primaryHeight - box.midY
+        
+        // Convert Cocoa global to screen-local (view coordinates)
+        let localX = box.midX - screen.frame.origin.x
+        let localY = cocoaMidY - screen.frame.origin.y
+        
+        return CGPoint(x: localX, y: localY)
+    }
+    
     private func handleMouseMoved() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = targetScreen ?? NSScreen.main else { return }
         let mousePos = NSEvent.mouseLocation
         let screenH = screen.frame.height
         
@@ -77,7 +120,7 @@ class RealTimeOverlayView: NSView {
     }
     
     private func handleClick() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = targetScreen ?? NSScreen.main else { return }
         let mousePos = NSEvent.mouseLocation
         let screenH = screen.frame.height
         
@@ -224,26 +267,49 @@ class RealTimeOverlayView: NSView {
         NSColor.clear.setFill()
         bounds.fill()
         
-        guard let screen = NSScreen.main else { return }
-        let screenH = screen.frame.height
-        
         for (i, block) in textBlocks.enumerated() {
             if hiddenBlockIds.contains(block.originalText) { continue }
             
             let isHovered = (hoveredBlockIndex == i)
             if translatorState.hideOnHover && isHovered { continue }
             
-            drawBlock(block, screenHeight: screenH, isHovered: isHovered)
+            drawBlock(block, isHovered: isHovered)
         }
     }
     
-    private func drawBlock(_ block: TranslatedTextBlock, screenHeight: CGFloat, isHovered: Bool) {
+    private func drawBlock(_ block: TranslatedTextBlock, isHovered: Bool) {
         let box = block.boundingBox
         guard box.width > 20, box.height > 15 else { return }
         
+        // Get local center coordinates for this screen
+        guard let localCenter = getLocalCenter(box) else { return }
+        
         let text = block.translatedText
-        let fontSize = max(CGFloat(translatorState.fontSize), 13)
+        let fontSize = max(CGFloat(translatorState.fontSize), 8)
+        
+        // Check display mode: 0 = box, 1 = outline
+        if translatorState.overlayDisplayMode == 1 {
+            drawOutlinedText(text: text, center: localCenter, fontSize: fontSize, boxWidth: box.width, isHovered: isHovered)
+        } else {
+            drawBoxText(text: text, center: localCenter, fontSize: fontSize, boxWidth: box.width, isHovered: isHovered)
+        }
+    }
+    
+    /// Draw text in a box with background (customizable style)
+    private func drawBoxText(text: String, center: CGPoint, fontSize: CGFloat, boxWidth: CGFloat, isHovered: Bool) {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        
+        // Get customization settings
+        let paddingH = CGFloat(translatorState.boxPaddingH)
+        let paddingV = CGFloat(translatorState.boxPaddingV)
+        let cornerRadius = CGFloat(translatorState.boxCornerRadius)
+        let backgroundColor = NSColor(hex: translatorState.boxBackgroundColorHex) ?? NSColor.white
+        let textColor = NSColor(hex: translatorState.boxTextColorHex) ?? NSColor.black
+        let borderWidth = CGFloat(translatorState.boxBorderWidth)
+        let borderColor = NSColor(hex: translatorState.boxBorderColorHex) ?? NSColor.black
+        let shadowEnabled = translatorState.boxShadowEnabled
+        let coverOriginal = translatorState.boxCoverOriginal
+        let opacity = CGFloat(translatorState.overlayOpacity)
         
         let para = NSMutableParagraphStyle()
         para.alignment = .center
@@ -251,14 +317,14 @@ class RealTimeOverlayView: NSView {
         
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.black,
+            .foregroundColor: textColor,
             .paragraphStyle: para
         ]
         
         // Use original box width, min 120
-        let wrapWidth = max(box.width, 120)
+        let wrapWidth = max(boxWidth, 120)
         let textBounds = text.boundingRect(
-            with: CGSize(width: wrapWidth - 20, height: .greatestFiniteMagnitude),
+            with: CGSize(width: wrapWidth - paddingH * 2, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: attrs
         )
@@ -266,37 +332,45 @@ class RealTimeOverlayView: NSView {
         // Add extra line height to prevent clipping at certain font sizes
         let lineHeight = font.ascender - font.descender + font.leading
         let textW = ceil(textBounds.width) + 2
-        let textH = ceil(textBounds.height) + ceil(lineHeight * 0.3)  // Extra buffer
+        let textH = ceil(textBounds.height) + ceil(lineHeight * 0.3)
         
-        // Rect sized for text, centered on original box center
-        let rectW = textW + 24
-        let rectH = textH + 16
-        let centerX = box.midX
-        let centerY = screenHeight - box.midY
+        // Rect sized for text with custom padding
+        let rectW = textW + paddingH * 2
+        let rectH = textH + paddingV * 2
         
-        let rect = CGRect(x: centerX - rectW/2, y: centerY - rectH/2, width: rectW, height: rectH)
+        let rect = CGRect(x: center.x - rectW/2, y: center.y - rectH/2, width: rectW, height: rectH)
         
-        // Shadow
-        let shadowPath = NSBezierPath(roundedRect: rect.offsetBy(dx: 1, dy: -1), xRadius: 5, yRadius: 5)
-        NSColor.black.withAlphaComponent(0.12).setFill()
-        shadowPath.fill()
+        // Shadow (if enabled)
+        if shadowEnabled {
+            let shadowPath = NSBezierPath(roundedRect: rect.offsetBy(dx: 1, dy: -1), xRadius: cornerRadius, yRadius: cornerRadius)
+            NSColor.black.withAlphaComponent(0.15).setFill()
+            shadowPath.fill()
+        }
         
-        // Background
-        let bgPath = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
-        NSColor.white.withAlphaComponent(CGFloat(translatorState.overlayOpacity)).setFill()
+        // Solid background to cover original text (if enabled)
+        if coverOriginal {
+            let coverPath = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
+            backgroundColor.setFill()
+            coverPath.fill()
+        }
+        
+        // Semi-transparent background on top
+        let bgPath = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
+        backgroundColor.withAlphaComponent(opacity).setFill()
         bgPath.fill()
         
         // Border
         if isHovered && !translatorState.hideOnHover {
             NSColor.systemBlue.setStroke()
             bgPath.lineWidth = 2.5
-        } else {
-            NSColor.black.withAlphaComponent(0.1).setStroke()
-            bgPath.lineWidth = 1
+            bgPath.stroke()
+        } else if borderWidth > 0 {
+            borderColor.setStroke()
+            bgPath.lineWidth = borderWidth
+            bgPath.stroke()
         }
-        bgPath.stroke()
         
-        // Text - centered in rect (use ceiled dimensions)
+        // Text - centered in rect
         let textRect = CGRect(
             x: rect.midX - textW / 2,
             y: rect.midY - textH / 2,
@@ -307,6 +381,92 @@ class RealTimeOverlayView: NSView {
         text.draw(in: textRect, withAttributes: attrs)
     }
     
+    /// Draw text with outline stroke effect (subtitle style)
+    private func drawOutlinedText(text: String, center: CGPoint, fontSize: CGFloat, boxWidth: CGFloat, isHovered: Bool) {
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        let outlineWidth = CGFloat(translatorState.outlineWidth)
+        
+        // Parse colors from hex
+        let textColor = NSColor(hex: translatorState.textColorHex) ?? NSColor.white
+        let outlineColor = NSColor(hex: translatorState.outlineColorHex) ?? NSColor.black
+        
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineBreakMode = .byWordWrapping
+        
+        // Calculate text bounds
+        let measureAttrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .paragraphStyle: para
+        ]
+        
+        let wrapWidth = max(boxWidth, 120)
+        let textBounds = text.boundingRect(
+            with: CGSize(width: wrapWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: measureAttrs
+        )
+        
+        let textW = ceil(textBounds.width) + outlineWidth * 2
+        let textH = ceil(textBounds.height) + outlineWidth * 2
+        
+        // Text rect centered on the target position
+        let textRect = CGRect(
+            x: center.x - textW / 2,
+            y: center.y - textH / 2,
+            width: textW,
+            height: textH
+        )
+        
+        // Draw outline by drawing text in 8 directions
+        let outlineAttrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: outlineColor,
+            .paragraphStyle: para
+        ]
+        
+        for i in 0..<8 {
+            let angle = Double(i) * .pi / 4
+            let dx = cos(angle) * Double(outlineWidth)
+            let dy = sin(angle) * Double(outlineWidth)
+            
+            let offsetRect = textRect.offsetBy(dx: CGFloat(dx), dy: CGFloat(dy))
+            text.draw(in: offsetRect, withAttributes: outlineAttrs)
+        }
+        
+        // Draw main text on top
+        var mainAttrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: textColor,
+            .paragraphStyle: para
+        ]
+        
+        // Add hover effect
+        if isHovered && !translatorState.hideOnHover {
+            mainAttrs[.foregroundColor] = NSColor.systemBlue
+        }
+        
+        text.draw(in: textRect, withAttributes: mainAttrs)
+    }
+    
     override var isFlipped: Bool { false }
+}
+
+// MARK: - NSColor Hex Extension
+
+extension NSColor {
+    convenience init?(hex: String) {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
+        
+        var rgb: UInt64 = 0
+        guard Scanner(string: hexSanitized).scanHexInt64(&rgb) else { return nil }
+        
+        let r = CGFloat((rgb & 0xFF0000) >> 16) / 255.0
+        let g = CGFloat((rgb & 0x00FF00) >> 8) / 255.0
+        let b = CGFloat(rgb & 0x0000FF) / 255.0
+        
+        self.init(red: r, green: g, blue: b, alpha: 1.0)
+    }
 }
 

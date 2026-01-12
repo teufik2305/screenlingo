@@ -9,6 +9,7 @@ struct CaptureResult {
     let bounds: CGRect
     let processID: Int32
     let appName: String
+    let screen: NSScreen?  // The screen the window is primarily on (for multi-monitor support)
 }
 
 /// Handles window capture and screen recording permissions
@@ -78,10 +79,61 @@ class WindowCaptureService {
             ) else { continue }
             
             let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-            return CaptureResult(image: image, bounds: bounds, processID: pid, appName: appName)
+            
+            // Detect which screen the window is primarily on
+            let windowScreen = findScreenForWindow(bounds: bounds)
+            
+            return CaptureResult(image: image, bounds: bounds, processID: pid, appName: appName, screen: windowScreen)
         }
         
         return nil
+    }
+    
+    /// Find which screen a window is primarily on based on its bounds
+    /// CGWindowList uses screen coordinates where (0,0) is top-left of primary screen
+    /// NSScreen uses Cocoa coordinates where (0,0) is bottom-left of primary screen
+    private func findScreenForWindow(bounds: CGRect) -> NSScreen? {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { return nil }
+        
+        // Convert CG coordinates (origin top-left) to Cocoa coordinates (origin bottom-left)
+        // For the primary screen, we need to flip the Y coordinate
+        guard let primaryScreen = screens.first else { return nil }
+        let primaryHeight = primaryScreen.frame.height
+        
+        // Convert window bounds from CG (top-left origin) to Cocoa (bottom-left origin)
+        let cocoaBounds = CGRect(
+            x: bounds.origin.x,
+            y: primaryHeight - bounds.origin.y - bounds.height,
+            width: bounds.width,
+            height: bounds.height
+        )
+        
+        // Find the screen that contains the center of the window
+        let windowCenter = CGPoint(x: cocoaBounds.midX, y: cocoaBounds.midY)
+        
+        for screen in screens {
+            if screen.frame.contains(windowCenter) {
+                return screen
+            }
+        }
+        
+        // Fallback: find screen with most overlap
+        var maxOverlapArea: CGFloat = 0
+        var bestScreen: NSScreen? = nil
+        
+        for screen in screens {
+            let intersection = screen.frame.intersection(cocoaBounds)
+            if !intersection.isNull {
+                let area = intersection.width * intersection.height
+                if area > maxOverlapArea {
+                    maxOverlapArea = area
+                    bestScreen = screen
+                }
+            }
+        }
+        
+        return bestScreen ?? screens.first
     }
     
     /// Generate a hash of an image for change detection
