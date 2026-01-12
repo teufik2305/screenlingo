@@ -5,7 +5,7 @@ Real-time screen translation overlay for macOS. Translates text in any window us
 ## Features
 
 - Real-time OCR text detection (Apple Vision)
-- Multiple translation backends: Apple Translation, LibreTranslate, Google Translate, LLM (OpenAI/Claude/Gemini)
+- Multiple translation backends: Apple Translation, LibreTranslate, Google Translate, LLM (OpenAI/Claude/Gemini/Local)
 - **Multi-monitor support** - overlay follows windows across displays
 - **Two display modes**: Box (customizable background) or Outline (subtitle-style stroke)
 - **Confidence Mode (Beta)** - LLM rates translation quality, retries low-confidence results
@@ -49,7 +49,7 @@ swift build && .build/debug/OverlayTranslator
    | Apple | None (macOS 15+, download language packs) |
    | Google | Works out of box |
    | LibreTranslate | Set server URL |
-   | LLM | Set API URL and key |
+   | LLM | Set API URL and key (OpenAI-compatible: Ollama, vLLM, LM Studio) |
 
 3. **Select Languages** and start translating
 

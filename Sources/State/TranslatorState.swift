@@ -276,7 +276,7 @@ class TranslatorState: ObservableObject {
     @AppStorage("openaiApiKey", store: TranslatorState.preferencesStore) var openaiApiKey: String = ""
     @AppStorage("anthropicApiKey", store: TranslatorState.preferencesStore) var anthropicApiKey: String = ""
     @AppStorage("geminiApiKey", store: TranslatorState.preferencesStore) var geminiApiKey: String = ""
-    @AppStorage("ollamaApiKey", store: TranslatorState.preferencesStore) var ollamaApiKey: String = ""  // Usually not needed
+    @AppStorage("ollamaApiKey", store: TranslatorState.preferencesStore) var localApiKey: String = ""  // Usually not needed for local models
     @AppStorage("otherLlmApiKey", store: TranslatorState.preferencesStore) var otherLlmApiKey: String = ""
     
     var translationService: TranslationServiceType {
@@ -295,12 +295,12 @@ class TranslatorState: ObservableObject {
         let url = llmApiUrl.lowercased()
         if url.contains("anthropic.com") || url.contains("claude") {
             return .anthropic
-        } else if url.contains("openai.com") || url.contains("gpt") {
+        } else if url.contains("openai.com") {
             return .openai
         } else if url.contains("generativelanguage.googleapis.com") || url.contains("gemini") {
             return .gemini
-        } else if url.contains("localhost:11434") || url.contains("ollama") {
-            return .ollama
+        } else if url.contains("localhost") || url.contains("127.0.0.1") {
+            return .local
         } else {
             return .other
         }
@@ -312,7 +312,7 @@ class TranslatorState: ObservableObject {
             case .openai: return openaiApiKey
             case .anthropic: return anthropicApiKey
             case .gemini: return geminiApiKey
-            case .ollama: return ollamaApiKey
+            case .local: return localApiKey
             case .other: return otherLlmApiKey
             }
         }
@@ -321,7 +321,7 @@ class TranslatorState: ObservableObject {
             case .openai: openaiApiKey = newValue
             case .anthropic: anthropicApiKey = newValue
             case .gemini: geminiApiKey = newValue
-            case .ollama: ollamaApiKey = newValue
+            case .local: localApiKey = newValue
             case .other: otherLlmApiKey = newValue
             }
         }

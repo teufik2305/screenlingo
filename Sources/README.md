@@ -15,7 +15,7 @@ Sources/
 │   ├── TranslationService.swift         # Provider router, confidence retry logic
 │   ├── TranslationProvider.swift        # Provider protocol
 │   ├── TranslationResult.swift          # Result with confidence score
-│   └── Providers/                       # OpenAI, Anthropic, Gemini, Google, Apple, LibreTranslate
+│   └── Providers/                       # OpenAI, Anthropic, Gemini, Google, Apple, LibreTranslate, Local (OpenAI-compatible)
 │
 ├── State/                  # Application state
 │   ├── TranslatorState.swift            # Main state (ObservableObject)

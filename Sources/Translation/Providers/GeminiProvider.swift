@@ -2,13 +2,19 @@ import Foundation
 
 /// Google Gemini native API translation provider
 actor GeminiProvider: TranslationProvider {
+    let apiUrl: String
     let apiKey: String
     let model: String
     let customSystemPrompt: String?
     let autoAppendLanguages: Bool
     nonisolated let providerName: String = "Gemini"
     
-    init(apiKey: String, model: String, customSystemPrompt: String? = nil, autoAppendLanguages: Bool = true) {
+    private static let defaultBaseUrl = "https://generativelanguage.googleapis.com/v1beta"
+    
+    init(apiUrl: String? = nil, apiKey: String, model: String, customSystemPrompt: String? = nil, autoAppendLanguages: Bool = true) {
+        // Use provided URL or default, ensure no trailing slash
+        let baseUrl = (apiUrl ?? Self.defaultBaseUrl).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        self.apiUrl = baseUrl
         self.apiKey = apiKey
         self.model = model
         self.customSystemPrompt = customSystemPrompt
@@ -17,8 +23,8 @@ actor GeminiProvider: TranslationProvider {
     
     func translate(text: String, from sourceLang: String, to targetLang: String, timeout: TimeInterval = 30) async throws -> String {
         // Build the API URL with model and API key
-        let baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
-        guard var urlComponents = URLComponents(string: baseUrl) else {
+        let fullUrl = "\(apiUrl)/models/\(model):generateContent"
+        guard var urlComponents = URLComponents(string: fullUrl) else {
             throw TranslationError.invalidResponse
         }
         urlComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]
@@ -110,8 +116,8 @@ actor GeminiProvider: TranslationProvider {
     }
     
     func translateWithConfidence(text: String, from sourceLang: String, to targetLang: String, timeout: TimeInterval = 30) async throws -> LLMTranslationResult {
-        let baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
-        guard var urlComponents = URLComponents(string: baseUrl) else {
+        let fullUrl = "\(apiUrl)/models/\(model):generateContent"
+        guard var urlComponents = URLComponents(string: fullUrl) else {
             throw TranslationError.invalidResponse
         }
         urlComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]

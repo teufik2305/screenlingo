@@ -47,7 +47,7 @@ actor TranslationService {
         let usedLibre: Bool
         let usedLLM: Bool
         
-        // Priority 1: LLM (OpenAI GPT / Claude / Gemini)
+        // Priority 1: LLM (OpenAI GPT / Claude / Gemini / Local-self-hosted LLM)
         if useLLM {
             let url = llmApiUrl?.isEmpty == false ? llmApiUrl! : "https://api.openai.com/v1/chat/completions"
             let apiKey = llmApiKey ?? ""
@@ -194,7 +194,7 @@ actor TranslationService {
             return AnthropicProvider(apiUrl: apiUrl, apiKey: apiKey, model: model, customSystemPrompt: systemPrompt, autoAppendLanguages: autoAppendLanguages)
         } else if url.contains("generativelanguage.googleapis.com") && !url.contains("/openai/") {
             // Native Gemini API (not OpenAI-compatible endpoint)
-            return GeminiProvider(apiKey: apiKey, model: model, customSystemPrompt: systemPrompt, autoAppendLanguages: autoAppendLanguages)
+            return GeminiProvider(apiUrl: apiUrl, apiKey: apiKey, model: model, customSystemPrompt: systemPrompt, autoAppendLanguages: autoAppendLanguages)
         } else {
             // OpenAI and OpenAI-compatible APIs (including Gemini's OpenAI endpoint, Ollama, etc.)
             return OpenAIProvider(apiUrl: apiUrl, apiKey: apiKey, model: model, customSystemPrompt: systemPrompt, autoAppendLanguages: autoAppendLanguages)

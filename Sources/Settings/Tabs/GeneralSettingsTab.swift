@@ -129,6 +129,22 @@ struct GeneralSettingsTab: View {
                             
                         case .llm:
                             VStack(alignment: .leading, spacing: 8) {
+                                // Compatibility note (only for local/other providers)
+                                if state.detectedLLMProvider == .local || state.detectedLLMProvider == .other {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "info.circle.fill")
+                                            .foregroundStyle(.blue)
+                                            .font(.caption)
+                                        Text("Requires OpenAI-compatible API (Ollama, vLLM, LM Studio, etc.)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.vertical, 4)
+                                    .padding(.horizontal, 8)
+                                    .background(Color.blue.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
+                                
                                 // Provider detection indicator
                                 HStack(spacing: 6) {
                                     Image(systemName: providerIcon(state.detectedLLMProvider))
@@ -157,13 +173,24 @@ struct GeneralSettingsTab: View {
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     
-                                    Button("OpenAI") {
-                                        state.llmApiUrl = "https://api.openai.com/v1/chat/completions"
-                                        state.llmModel = "gpt-4.1-mini"
+                                    Menu {
+                                        Button("Chat Completions") {
+                                            state.llmApiUrl = "https://api.openai.com/v1/chat/completions"
+                                            state.llmModel = "gpt-4.1-mini"
+                                        }
+                                        Button("Responses API") {
+                                            state.llmApiUrl = "https://api.openai.com/v1/responses"
+                                            state.llmModel = "gpt-4.1-mini"
+                                        }
+                                    } label: {
+                                        Text("OpenAI")
                                     }
                                     .font(.caption)
-                                    .buttonStyle(.bordered)
-                                    .tint(.green)
+                                    .menuStyle(.borderlessButton)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.green.opacity(0.2))
+                                    .cornerRadius(6)
                                     
                                     Button("Claude") {
                                         state.llmApiUrl = "https://api.anthropic.com/v1/messages"
@@ -181,9 +208,9 @@ struct GeneralSettingsTab: View {
                                     .buttonStyle(.bordered)
                                     .tint(.blue)
                                     
-                                    Button("Ollama") {
+                                    Button("Local") {
                                         state.llmApiUrl = "http://localhost:11434/v1/chat/completions"
-                                        state.llmModel = "llama3.3"
+                                        state.llmModel = "llama4"
                                     }
                                     .font(.caption)
                                     .buttonStyle(.bordered)
@@ -584,7 +611,7 @@ struct GeneralSettingsTab: View {
         case .openai: return "sparkles"
         case .anthropic: return "brain.head.profile"
         case .gemini: return "diamond"
-        case .ollama: return "desktopcomputer"
+        case .local: return "desktopcomputer"
         case .other: return "server.rack"
         }
     }
@@ -594,7 +621,7 @@ struct GeneralSettingsTab: View {
         case .openai: return .green
         case .anthropic: return .orange
         case .gemini: return .blue
-        case .ollama: return .gray
+        case .local: return .gray
         case .other: return .purple
         }
     }
@@ -602,18 +629,20 @@ struct GeneralSettingsTab: View {
     private func modelSuggestions(for provider: LLMProvider) -> [String] {
         switch provider {
         case .openai:
-            // Latest: GPT-5.2 (Dec 2025), GPT-5 (Aug 2025), GPT-4.1 (Apr 2025)
-            return ["gpt-4.1-mini", "gpt-4.1-nano", "gpt-5", "gpt-5.2"]
+            // Latest: GPT-5 (Aug 2025), GPT-4.1 (Apr 2025), o3/o4 reasoning models
+            return ["gpt-4.1-mini", "gpt-5-mini", "gpt-5", "o3-mini", "o4-mini"]
         case .anthropic:
             // Latest: Opus 4.5 (Nov 2025), Sonnet 4.5 (Sep 2025), Haiku 4.5 (Oct 2025)
             return ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5"]
         case .gemini:
-            // Latest: Gemini 2.5 Pro/Flash (Jun 2025), Flash-Lite (Jul 2025)
-            return ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"]
-        case .ollama:
-            return ["llama3.3", "qwen3", "gemma3"]
+            // Latest: Gemini 3 (Dec 2025), Gemini 2.5 (Jun 2025)
+            return ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3-flash", "gemini-3-pro"]
+        case .local:
+            // Popular local models (works with Ollama, LM Studio, vLLM, etc.)
+            return ["llama4", "qwen3", "deepseek-r1", "mistral", "gemma3", "phi4"]
         case .other:
-            return ["gpt-4.1-mini", "gpt-5"]
+            // Generic suggestions for self-hosted OpenAI-compatible servers
+            return ["llama4", "qwen3", "deepseek-r1", "mistral", "gemma3", "phi4", "custom-model"]
         }
     }
     
@@ -622,7 +651,7 @@ struct GeneralSettingsTab: View {
         case .openai: return "sk-... (required)"
         case .anthropic: return "sk-ant-... (required)"
         case .gemini: return "AIza... (required)"
-        case .ollama: return "Usually not needed for local"
+        case .local: return "Usually not needed for local"
         case .other: return "API key if required"
         }
     }

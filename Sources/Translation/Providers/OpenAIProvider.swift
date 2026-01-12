@@ -1,6 +1,7 @@
 import Foundation
 
 /// OpenAI GPT translation provider (also works with OpenAI-compatible APIs like Ollama, LM Studio)
+/// Supports both Chat Completions API (/v1/chat/completions) and Responses API (/v1/responses)
 actor OpenAIProvider: TranslationProvider {
     let apiUrl: String
     let apiKey: String
@@ -8,6 +9,11 @@ actor OpenAIProvider: TranslationProvider {
     let customSystemPrompt: String?
     let autoAppendLanguages: Bool
     nonisolated let providerName: String
+    
+    /// Whether this provider uses the newer Responses API format
+    private var isResponsesAPI: Bool {
+        apiUrl.contains("/responses")
+    }
     
     init(apiUrl: String, apiKey: String, model: String, customSystemPrompt: String? = nil, autoAppendLanguages: Bool = true) {
         self.apiUrl = apiUrl
@@ -55,20 +61,33 @@ actor OpenAIProvider: TranslationProvider {
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // OpenAI-compatible API format
         if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
         
-        let body: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": finalSystemPrompt],
-                ["role": "user", "content": text]
-            ],
-            "temperature": 0.3,
-            "max_tokens": 4096
-        ]
+        // Build request body based on API type
+        let body: [String: Any]
+        if isResponsesAPI {
+            // OpenAI Responses API format
+            body = [
+                "model": model,
+                "instructions": finalSystemPrompt,
+                "input": text,
+                "temperature": 0.3,
+                "max_output_tokens": 4096
+            ]
+        } else {
+            // Chat Completions API format (OpenAI-compatible)
+            body = [
+                "model": model,
+                "messages": [
+                    ["role": "system", "content": finalSystemPrompt],
+                    ["role": "user", "content": text]
+                ],
+                "temperature": 0.3,
+                "max_tokens": 4096
+            ]
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         let startTime = Date()
@@ -88,14 +107,12 @@ actor OpenAIProvider: TranslationProvider {
         
         log.debug("[\(providerName)] API response: HTTP 200 in \(String(format: "%.0f", duration * 1000))ms", category: .api)
         
-        // Parse OpenAI-compatible response format
-        // {"choices": [{"message": {"content": "..."}}], ...}
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
-              let firstChoice = choices.first,
-              let message = firstChoice["message"] as? [String: Any],
-              let content = message["content"] as? String else {
-            throw TranslationError.invalidResponse
+        // Parse response based on API type
+        let content: String
+        if isResponsesAPI {
+            content = try parseResponsesAPIOutput(data)
+        } else {
+            content = try parseChatCompletionsOutput(data)
         }
         
         let result = content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -160,15 +177,29 @@ actor OpenAIProvider: TranslationProvider {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
         
-        let body: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": finalSystemPrompt],
-                ["role": "user", "content": text]
-            ],
-            "temperature": 0.3,
-            "max_tokens": 4096
-        ]
+        // Build request body based on API type
+        let body: [String: Any]
+        if isResponsesAPI {
+            // OpenAI Responses API format
+            body = [
+                "model": model,
+                "instructions": finalSystemPrompt,
+                "input": text,
+                "temperature": 0.3,
+                "max_output_tokens": 4096
+            ]
+        } else {
+            // Chat Completions API format
+            body = [
+                "model": model,
+                "messages": [
+                    ["role": "system", "content": finalSystemPrompt],
+                    ["role": "user", "content": text]
+                ],
+                "temperature": 0.3,
+                "max_tokens": 4096
+            ]
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         let startTime = Date()
@@ -186,13 +217,12 @@ actor OpenAIProvider: TranslationProvider {
             throw TranslationError.networkError("\(providerName) returned HTTP \(httpResponse.statusCode)")
         }
         
-        // Parse response
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
-              let firstChoice = choices.first,
-              let message = firstChoice["message"] as? [String: Any],
-              let content = message["content"] as? String else {
-            throw TranslationError.invalidResponse
+        // Parse response based on API type
+        let content: String
+        if isResponsesAPI {
+            content = try parseResponsesAPIOutput(data)
+        } else {
+            content = try parseChatCompletionsOutput(data)
         }
         
         // Parse the JSON from content
@@ -228,6 +258,77 @@ actor OpenAIProvider: TranslationProvider {
         // Fallback: treat entire response as translation with low confidence
         log.warning("[\(providerName)] Failed to parse confidence JSON, using raw response", category: .api)
         return LLMTranslationResult(text: trimmed, confidence: 50)
+    }
+    
+    /// Parse Chat Completions API response: {"choices": [{"message": {"content": "..."}}]}
+    private func parseChatCompletionsOutput(_ data: Data) throws -> String {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "binary data"
+            log.error("[\(providerName)] Failed to parse JSON response: \(preview)", category: .api)
+            throw TranslationError.translationFailed("Server returned invalid JSON. Expected OpenAI-compatible format.")
+        }
+        
+        // Check for error in response body (some servers return 200 with error)
+        if let error = json["error"] as? [String: Any], let message = error["message"] as? String {
+            throw TranslationError.translationFailed(message)
+        }
+        
+        guard let choices = json["choices"] as? [[String: Any]],
+              let firstChoice = choices.first,
+              let message = firstChoice["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            let keys = json.keys.joined(separator: ", ")
+            log.error("[\(providerName)] Unexpected response format. Keys: \(keys)", category: .api)
+            throw TranslationError.translationFailed("Server response format not compatible. Expected {choices: [{message: {content}}]} but got keys: \(keys)")
+        }
+        return content
+    }
+    
+    /// Parse Responses API response: {"output": [{"type": "message", "content": [{"type": "output_text", "text": "..."}]}]}
+    /// Also handles simpler format: {"output_text": "..."} or {"output": "..."}
+    private func parseResponsesAPIOutput(_ data: Data) throws -> String {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "binary data"
+            log.error("[\(providerName)] Failed to parse JSON response: \(preview)", category: .api)
+            throw TranslationError.translationFailed("Server returned invalid JSON. Expected Responses API format.")
+        }
+        
+        // Check for error in response body
+        if let error = json["error"] as? [String: Any], let message = error["message"] as? String {
+            throw TranslationError.translationFailed(message)
+        }
+        
+        // Try direct output_text field first (simplest format)
+        if let outputText = json["output_text"] as? String {
+            return outputText
+        }
+        
+        // Try output as array of message objects
+        if let output = json["output"] as? [[String: Any]] {
+            for item in output {
+                // Look for message type with content array
+                if let content = item["content"] as? [[String: Any]] {
+                    for contentItem in content {
+                        if let text = contentItem["text"] as? String {
+                            return text
+                        }
+                    }
+                }
+                // Direct text in output item
+                if let text = item["text"] as? String {
+                    return text
+                }
+            }
+        }
+        
+        // Try output as single string
+        if let output = json["output"] as? String {
+            return output
+        }
+        
+        let keys = json.keys.joined(separator: ", ")
+        log.error("[\(providerName)] Unexpected Responses API format. Keys: \(keys)", category: .api)
+        throw TranslationError.translationFailed("Server response format not compatible with Responses API. Got keys: \(keys)")
     }
     
     private func handleError(data: Data, statusCode: Int) throws {

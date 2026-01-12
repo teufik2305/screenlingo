@@ -38,7 +38,7 @@ enum TranslationServiceType: Int, CaseIterable {
         case .apple: return "On-device, private"
         case .ltEngine: return "Open source, flexible"
         case .google: return "Cloud API"
-        case .llm: return "GPT / Claude"
+        case .llm: return "OpenAI / Claude / Gemini / Local"
         }
     }
     
@@ -51,7 +51,7 @@ enum TranslationServiceType: Int, CaseIterable {
         case .google: 
             return "Uses Google Translate's public API (translate.googleapis.com). Fast and reliable with broad language support. Text is sent to Google's servers. No API key required. Works out of the box."
         case .llm:
-            return "Uses OpenAI GPT or Anthropic Claude for high-quality AI translation. Auto-detects provider from URL. Supports any OpenAI-compatible API (including local LLMs via Ollama, LM Studio, etc.)."
+            return "Uses LLM APIs for high-quality AI translation. Supports OpenAI, Claude, Gemini, and any OpenAI-compatible server (Ollama, vLLM, LM Studio). Server must return standard OpenAI response format."
         }
     }
     
