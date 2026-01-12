@@ -179,24 +179,51 @@ struct MenuBarView: View {
             
             Divider()
             
-            // Clear Cache
-            Button(action: { appDelegate.clearTranslationCache() }) {
+            // Cache Menu
+            Menu {
+                Button(action: { appDelegate.clearTranslationCache() }) {
+                    HStack {
+                        Image(systemName: "trash")
+                        Text("Clear Memory Cache")
+                    }
+                }
+                .disabled(!appDelegate.isTranslating)
+                
+                Button(action: { appDelegate.deleteCacheFile() }) {
+                    HStack {
+                        Image(systemName: "trash.slash")
+                        Text("Delete Cache File")
+                    }
+                }
+                
+                if appDelegate.isTranslating && appDelegate.cacheSize > 0 {
+                    Divider()
+                    
+                    Button(action: { appDelegate.saveTranslationCache() }) {
+                        HStack {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Save Cache Now")
+                        }
+                    }
+                }
+            } label: {
                 HStack {
-                    Image(systemName: "trash")
+                    Image(systemName: "internaldrive")
                         .foregroundStyle(.secondary)
-                    Text("Clear Cache")
+                    Text("Cache")
                     Spacer()
                     if appDelegate.cacheSize > 0 {
                         Text("\(appDelegate.cacheSize)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .disabled(!appDelegate.isTranslating)
             
             // Settings
             Button(action: { appDelegate.openSettings() }) {

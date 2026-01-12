@@ -226,6 +226,43 @@ class TranslatorState: ObservableObject {
     @AppStorage("llmModel", store: TranslatorState.preferencesStore) var llmModel: String = "gpt-4.1-mini" {
         didSet { log.info("LLM model changed: \(llmModel)", category: .settings) }
     }
+    @AppStorage("llmSystemPrompt", store: TranslatorState.preferencesStore) var llmSystemPrompt: String = "" {
+        didSet { log.info("LLM system prompt changed", category: .settings) }
+    }
+    @AppStorage("llmAutoAppendLanguages", store: TranslatorState.preferencesStore) var llmAutoAppendLanguages: Bool = true {
+        didSet { log.info("LLM auto-append languages: \(llmAutoAppendLanguages ? "enabled" : "disabled")", category: .settings) }
+    }
+    
+    // LLM Confidence settings
+    @AppStorage("llmConfidenceEnabled", store: TranslatorState.preferencesStore) var llmConfidenceEnabled: Bool = false {
+        didSet { log.info("LLM confidence mode: \(llmConfidenceEnabled ? "enabled" : "disabled")", category: .settings) }
+    }
+    @AppStorage("llmConfidenceThreshold", store: TranslatorState.preferencesStore) var llmConfidenceThreshold: Int = 70 {
+        didSet { log.info("LLM confidence threshold: \(llmConfidenceThreshold)%", category: .settings) }
+    }
+    @AppStorage("llmMaxRetries", store: TranslatorState.preferencesStore) var llmMaxRetries: Int = 3 {
+        didSet { log.info("LLM max retries: \(llmMaxRetries)", category: .settings) }
+    }
+    
+    /// Default system prompt for LLM translation (used when llmSystemPrompt is empty)
+    static let defaultLLMSystemPrompt = "You are a professional translator. Translate the following text from {source} to {target}. Only respond with the translation, nothing else. Do not include explanations, notes, or quotation marks around the translation."
+    
+    /// Language context suffix appended when auto-append is enabled and placeholders are missing
+    static let languageContextSuffix = " Translate from {source} to {target}."
+    
+    /// Get effective system prompt (custom or default)
+    var effectiveLLMSystemPrompt: String {
+        llmSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty 
+            ? TranslatorState.defaultLLMSystemPrompt 
+            : llmSystemPrompt
+    }
+    
+    /// Check if custom prompt is missing language placeholders
+    var llmSystemPromptMissingPlaceholders: Bool {
+        let prompt = llmSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return false }  // Default prompt has placeholders
+        return !prompt.contains("{source}") || !prompt.contains("{target}")
+    }
     
     // API Keys for different LLM providers
     @AppStorage("openaiApiKey", store: TranslatorState.preferencesStore) var openaiApiKey: String = ""
@@ -332,6 +369,12 @@ class TranslatorState: ObservableObject {
     }
     @AppStorage("translationDelay", store: TranslatorState.preferencesStore) var translationDelay: Double = 0.1 {  // seconds between translation requests
         didSet { log.info("Translation delay: \(Int(translationDelay * 1000))ms", category: .settings) }
+    }
+    @AppStorage("requestThrottleEnabled", store: TranslatorState.preferencesStore) var requestThrottleEnabled: Bool = true {
+        didSet { log.info("Request throttle: \(requestThrottleEnabled ? "enabled" : "disabled")", category: .settings) }
+    }
+    @AppStorage("minRequestInterval", store: TranslatorState.preferencesStore) var minRequestInterval: Double = 0.2 {  // minimum seconds between API requests (200ms default)
+        didSet { log.info("Min request interval: \(Int(minRequestInterval * 1000))ms", category: .settings) }
     }
     
     // MARK: OCR Settings

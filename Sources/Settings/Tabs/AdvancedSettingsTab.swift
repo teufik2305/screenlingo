@@ -318,19 +318,81 @@ struct AdvancedSettingsTab: View {
                         
                         Divider()
                         
-                        // Translation Delay
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Translation Delay")
-                                Spacer()
-                                Text("\(Int(state.translationDelay * 1000))ms")
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                        // Translation Delay (legacy, shown when throttle is disabled)
+                        if !state.requestThrottleEnabled {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Translation Delay")
+                                    Spacer()
+                                    Text("\(Int(state.translationDelay * 1000))ms")
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: $state.translationDelay, in: 0...1.0, step: 0.05)
+                                Text("Delay between translation requests. Higher = less rate limits.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
                             }
-                            Slider(value: $state.translationDelay, in: 0...1.0, step: 0.05)
-                            Text("Delay between translation requests. Higher = less rate limits.")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                            
+                            Divider()
+                        }
+                        
+                        // Request Throttling
+                        Toggle(isOn: $state.requestThrottleEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Request Throttling")
+                                Text("Space out API requests to prevent rate limiting")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        
+                        if state.requestThrottleEnabled {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Min Request Interval")
+                                    Spacer()
+                                    Text("\(Int(state.minRequestInterval * 1000))ms")
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: $state.minRequestInterval, in: 0.05...2.0, step: 0.05)
+                                Text("Minimum time between consecutive API requests. Prevents bursts.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                
+                                // Preset buttons for common providers
+                                HStack(spacing: 8) {
+                                    Text("Presets:")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    
+                                    Button("Fast (50ms)") {
+                                        state.minRequestInterval = 0.05
+                                        state.maxConcurrentTranslations = 5
+                                    }
+                                    .font(.caption2)
+                                    .buttonStyle(.bordered)
+                                    .help("For paid APIs with high rate limits")
+                                    
+                                    Button("Normal (200ms)") {
+                                        state.minRequestInterval = 0.2
+                                        state.maxConcurrentTranslations = 3
+                                    }
+                                    .font(.caption2)
+                                    .buttonStyle(.bordered)
+                                    .help("Recommended for most use cases")
+                                    
+                                    Button("Safe (500ms)") {
+                                        state.minRequestInterval = 0.5
+                                        state.maxConcurrentTranslations = 1
+                                    }
+                                    .font(.caption2)
+                                    .buttonStyle(.bordered)
+                                    .help("For free tiers (Gemini, etc.)")
+                                }
+                            }
+                            .padding(.leading, 20)
                         }
 
                         Divider()

@@ -5,9 +5,10 @@ Real-time screen translation overlay for macOS. Translates text in any window us
 ## Features
 
 - Real-time OCR text detection (Apple Vision)
-- Multiple translation backends: Apple Translation, LibreTranslate, Google Translate, LLM (OpenAI/Claude)
+- Multiple translation backends: Apple Translation, LibreTranslate, Google Translate, LLM (OpenAI/Claude/Gemini)
 - **Multi-monitor support** - overlay follows windows across displays
 - **Two display modes**: Box (customizable background) or Outline (subtitle-style stroke)
+- **Confidence Mode (Beta)** - LLM rates translation quality, retries low-confidence results
 - Customizable appearance: colors, padding, opacity, corner radius, borders
 - Smart caching with persistence
 - Configurable text grouping for manga/comics/subtitles

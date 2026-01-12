@@ -42,6 +42,9 @@ class RealTimeTranslationEngine {
     // Rate limit handling
     private var lastRateLimitTime: Date?
     
+    // Request throttling
+    private let requestThrottler = RequestThrottler()
+    
     // Multi-monitor support: track current screen
     private var currentScreen: NSScreen?
     
@@ -356,9 +359,14 @@ class RealTimeTranslationEngine {
                                 return nil
                             }
                             
-                            // Small delay between requests to avoid hammering API
-                            let delayNanoseconds = UInt64(translatorState.translationDelay * 1_000_000_000)
-                            try? await Task.sleep(nanoseconds: delayNanoseconds)
+                            // Request throttling - ensures minimum interval between API requests
+                            if translatorState.requestThrottleEnabled {
+                                await requestThrottler.throttle(minInterval: translatorState.minRequestInterval)
+                            } else {
+                                // Legacy behavior: small delay between requests
+                                let delayNanoseconds = UInt64(translatorState.translationDelay * 1_000_000_000)
+                                try? await Task.sleep(nanoseconds: delayNanoseconds)
+                            }
                             
                             log.cacheMiss(text)
                             log.translationStarted(text)
@@ -377,6 +385,11 @@ class RealTimeTranslationEngine {
                                     llmApiUrl: translatorState.llmApiUrl.isEmpty ? nil : translatorState.llmApiUrl,
                                     llmApiKey: translatorState.currentLlmApiKey.isEmpty ? nil : translatorState.currentLlmApiKey,
                                     llmModel: translatorState.llmModel.isEmpty ? nil : translatorState.llmModel,
+                                    llmSystemPrompt: translatorState.effectiveLLMSystemPrompt,
+                                    llmAutoAppendLanguages: translatorState.llmAutoAppendLanguages,
+                                    llmConfidenceEnabled: translatorState.llmConfidenceEnabled,
+                                    llmConfidenceThreshold: translatorState.llmConfidenceThreshold,
+                                    llmMaxRetries: translatorState.llmMaxRetries,
                                     customApiUrl: translatorState.customApiUrl.isEmpty ? nil : translatorState.customApiUrl,
                                     forceSerbianLatin: translatorState.forceSerbianLatin,
                                     timeout: translatorState.apiTimeout
@@ -429,5 +442,35 @@ class RealTimeTranslationEngine {
             
             return blocks
         }
+    }
+}
+
+// MARK: - Request Throttler
+
+/// Actor to manage request timing and ensure minimum intervals between API calls
+actor RequestThrottler {
+    private var lastRequestTime: Date?
+    
+    /// Wait if needed to respect the minimum interval between requests
+    func throttle(minInterval: TimeInterval) async {
+        if let lastTime = lastRequestTime {
+            let elapsed = Date().timeIntervalSince(lastTime)
+            if elapsed < minInterval {
+                let waitTime = minInterval - elapsed
+                log.debug("Throttling request, waiting \(Int(waitTime * 1000))ms", category: .api)
+                try? await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
+            }
+        }
+        lastRequestTime = Date()
+    }
+    
+    /// Mark that a request was just made (for tracking without waiting)
+    func markRequestMade() {
+        lastRequestTime = Date()
+    }
+    
+    /// Reset the throttler (e.g., when stopping)
+    func reset() {
+        lastRequestTime = nil
     }
 }

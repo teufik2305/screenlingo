@@ -1,16 +1,14 @@
 import Foundation
 
-/// Anthropic Claude translation provider
-actor AnthropicProvider: TranslationProvider {
-    let apiUrl: String
+/// Google Gemini native API translation provider
+actor GeminiProvider: TranslationProvider {
     let apiKey: String
     let model: String
     let customSystemPrompt: String?
     let autoAppendLanguages: Bool
-    nonisolated let providerName: String = "Claude"
+    nonisolated let providerName: String = "Gemini"
     
-    init(apiUrl: String, apiKey: String, model: String, customSystemPrompt: String? = nil, autoAppendLanguages: Bool = true) {
-        self.apiUrl = apiUrl
+    init(apiKey: String, model: String, customSystemPrompt: String? = nil, autoAppendLanguages: Bool = true) {
         self.apiKey = apiKey
         self.model = model
         self.customSystemPrompt = customSystemPrompt
@@ -18,7 +16,14 @@ actor AnthropicProvider: TranslationProvider {
     }
     
     func translate(text: String, from sourceLang: String, to targetLang: String, timeout: TimeInterval = 30) async throws -> String {
-        guard let url = URL(string: apiUrl) else {
+        // Build the API URL with model and API key
+        let baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
+        guard var urlComponents = URLComponents(string: baseUrl) else {
+            throw TranslationError.invalidResponse
+        }
+        urlComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        
+        guard let url = urlComponents.url else {
             throw TranslationError.invalidResponse
         }
         
@@ -46,16 +51,23 @@ actor AnthropicProvider: TranslationProvider {
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Anthropic Claude API format
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        
+        // Gemini native API format
         let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 4096,
-            "system": finalSystemPrompt,
-            "messages": [
-                ["role": "user", "content": text]
+            "systemInstruction": [
+                "parts": [
+                    ["text": finalSystemPrompt]
+                ]
+            ],
+            "contents": [
+                [
+                    "parts": [
+                        ["text": text]
+                    ]
+                ]
+            ],
+            "generationConfig": [
+                "temperature": 0.3,
+                "maxOutputTokens": 4096
             ]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -77,12 +89,15 @@ actor AnthropicProvider: TranslationProvider {
         
         log.debug("[\(providerName)] API response: HTTP 200 in \(String(format: "%.0f", duration * 1000))ms", category: .api)
         
-        // Parse Anthropic Claude response format
-        // {"content": [{"type": "text", "text": "..."}], ...}
+        // Parse Gemini response format
+        // {"candidates": [{"content": {"parts": [{"text": "..."}]}}]}
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]],
-              let firstContent = content.first,
-              let text = firstContent["text"] as? String else {
+              let candidates = json["candidates"] as? [[String: Any]],
+              let firstCandidate = candidates.first,
+              let content = firstCandidate["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let firstPart = parts.first,
+              let text = firstPart["text"] as? String else {
             throw TranslationError.invalidResponse
         }
         
@@ -95,7 +110,13 @@ actor AnthropicProvider: TranslationProvider {
     }
     
     func translateWithConfidence(text: String, from sourceLang: String, to targetLang: String, timeout: TimeInterval = 30) async throws -> LLMTranslationResult {
-        guard let url = URL(string: apiUrl) else {
+        let baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
+        guard var urlComponents = URLComponents(string: baseUrl) else {
+            throw TranslationError.invalidResponse
+        }
+        urlComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        
+        guard let url = urlComponents.url else {
             throw TranslationError.invalidResponse
         }
         
@@ -122,15 +143,23 @@ actor AnthropicProvider: TranslationProvider {
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         
         let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 4096,
-            "system": systemPrompt,
-            "messages": [
-                ["role": "user", "content": text]
+            "systemInstruction": [
+                "parts": [
+                    ["text": systemPrompt]
+                ]
+            ],
+            "contents": [
+                [
+                    "parts": [
+                        ["text": text]
+                    ]
+                ]
+            ],
+            "generationConfig": [
+                "temperature": 0.3,
+                "maxOutputTokens": 4096
             ]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -152,9 +181,12 @@ actor AnthropicProvider: TranslationProvider {
         
         // Parse response
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let contentArray = json["content"] as? [[String: Any]],
-              let firstContent = contentArray.first,
-              let content = firstContent["text"] as? String else {
+              let candidates = json["candidates"] as? [[String: Any]],
+              let firstCandidate = candidates.first,
+              let contentObj = firstCandidate["content"] as? [String: Any],
+              let parts = contentObj["parts"] as? [[String: Any]],
+              let firstPart = parts.first,
+              let content = firstPart["text"] as? String else {
             throw TranslationError.invalidResponse
         }
         
@@ -193,23 +225,19 @@ actor AnthropicProvider: TranslationProvider {
     }
     
     private func handleError(data: Data, statusCode: Int) throws {
-        // Parse Anthropic error format: {"type": "error", "error": {"type": "...", "message": "..."}}
+        // Parse Gemini error format: {"error": {"code": 400, "message": "...", "status": "..."}}
         if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let errorType = errorJson["type"] as? String, errorType == "error",
-           let errorDetails = errorJson["error"] as? [String: Any] {
-            let message = errorDetails["message"] as? String ?? "Unknown error"
-            let detailType = errorDetails["type"] as? String ?? ""
+           let error = errorJson["error"] as? [String: Any] {
+            let message = error["message"] as? String ?? "Unknown error"
+            let status = error["status"] as? String ?? ""
             
-            if statusCode == 401 || detailType == "authentication_error" {
+            if statusCode == 401 || statusCode == 403 || status == "UNAUTHENTICATED" || status == "PERMISSION_DENIED" {
                 throw TranslationError.invalidApiKey(providerName)
             }
-            if detailType == "invalid_request_error" && (message.lowercased().contains("credit") || message.lowercased().contains("billing")) {
-                throw TranslationError.billingError(providerName)
-            }
-            if statusCode == 429 || detailType == "rate_limit_error" {
+            if status == "RESOURCE_EXHAUSTED" || message.lowercased().contains("quota") {
                 throw TranslationError.rateLimitExceeded(providerName)
             }
-            if message.lowercased().contains("model") && message.lowercased().contains("not found") {
+            if statusCode == 404 || status == "NOT_FOUND" || message.lowercased().contains("model") {
                 throw TranslationError.modelNotFound(model)
             }
             
@@ -218,10 +246,8 @@ actor AnthropicProvider: TranslationProvider {
         
         // Fallback for common HTTP status codes
         switch statusCode {
-        case 401:
+        case 401, 403:
             throw TranslationError.invalidApiKey(providerName)
-        case 402:
-            throw TranslationError.billingError(providerName)
         case 429:
             throw TranslationError.rateLimitExceeded(providerName)
         case 404:

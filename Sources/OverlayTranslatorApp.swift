@@ -136,6 +136,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             .store(in: &cancellables)
         
         print("Overlay Translator started! Press \(translatorState.hotkeyDisplayString) to toggle.")
+        
+        // Open settings window on startup (menu bar icon may be hidden by macOS recording indicator)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.openSettings()
+        }
     }
     
     private func registerGlobalHotkey() {

@@ -12,6 +12,9 @@ class RealTimeOverlayView: NSView {
     // Position stabilization - prevents "breathing" effect
     private var stablePositions: [String: CGRect] = [:]
     
+    // Track actual drawn rectangles for accurate hit testing (in Cocoa global coordinates)
+    private var drawnRectsGlobal: [Int: CGRect] = [:]
+    
     // Multi-monitor support: the screen this overlay is displaying on
     var targetScreen: NSScreen?
     
@@ -100,14 +103,13 @@ class RealTimeOverlayView: NSView {
     }
     
     private func handleMouseMoved() {
-        guard let screen = targetScreen ?? NSScreen.main else { return }
         let mousePos = NSEvent.mouseLocation
-        let screenH = screen.frame.height
         
         var newHovered: Int? = nil
         for (i, block) in textBlocks.enumerated() {
             if hiddenBlockIds.contains(block.originalText) { continue }
-            if getHitRect(block, screenHeight: screenH).contains(mousePos) {
+            // Use actual drawn rect for hit testing (more accurate)
+            if let drawnRect = drawnRectsGlobal[i], drawnRect.contains(mousePos) {
                 newHovered = i
                 break
             }
@@ -120,13 +122,12 @@ class RealTimeOverlayView: NSView {
     }
     
     private func handleClick() {
-        guard let screen = targetScreen ?? NSScreen.main else { return }
         let mousePos = NSEvent.mouseLocation
-        let screenH = screen.frame.height
         
-        for block in textBlocks {
+        for (i, block) in textBlocks.enumerated() {
             if hiddenBlockIds.contains(block.originalText) { continue }
-            if getHitRect(block, screenHeight: screenH).contains(mousePos) {
+            // Use actual drawn rect for hit testing (more accurate)
+            if let drawnRect = drawnRectsGlobal[i], drawnRect.contains(mousePos) {
                 DispatchQueue.main.async { self.showContextMenu(for: block) }
                 return
             }
@@ -257,6 +258,7 @@ class RealTimeOverlayView: NSView {
     func clearBlocks() {
         self.textBlocks = []
         self.stablePositions = [:]  // Clear stabilization cache
+        self.drawnRectsGlobal = [:]  // Clear hit test rects
         hoveredBlockIndex = nil
         needsDisplay = true
     }
@@ -267,36 +269,120 @@ class RealTimeOverlayView: NSView {
         NSColor.clear.setFill()
         bounds.fill()
         
-        for (i, block) in textBlocks.enumerated() {
+        // Clear previous drawn rects
+        drawnRectsGlobal.removeAll()
+        
+        // Track drawn regions to prevent overlapping duplicates (in local coordinates)
+        var drawnLocalRects: [CGRect] = []
+        
+        // Sort blocks by translation length (prefer longer/more complete translations)
+        let sortedIndices = textBlocks.indices.sorted { i, j in
+            textBlocks[i].translatedText.count > textBlocks[j].translatedText.count
+        }
+        
+        for i in sortedIndices {
+            let block = textBlocks[i]
             if hiddenBlockIds.contains(block.originalText) { continue }
             
             let isHovered = (hoveredBlockIndex == i)
             if translatorState.hideOnHover && isHovered { continue }
             
-            drawBlock(block, isHovered: isHovered)
+            // Get the local center to check for overlap before drawing
+            guard let localCenter = getLocalCenter(block.boundingBox) else { continue }
+            
+            // Estimate the rect that would be drawn (approximate)
+            let estimatedRect = estimateDrawnRect(for: block, center: localCenter)
+            
+            // Check if this would overlap significantly with an already-drawn overlay
+            let hasSignificantOverlap = drawnLocalRects.contains { existingRect in
+                let intersection = existingRect.intersection(estimatedRect)
+                guard !intersection.isNull else { return false }
+                let overlapArea = intersection.width * intersection.height
+                let smallerArea = min(existingRect.width * existingRect.height, estimatedRect.width * estimatedRect.height)
+                // Skip if >50% overlap with existing
+                return smallerArea > 0 && overlapArea / smallerArea > 0.5
+            }
+            
+            if hasSignificantOverlap { continue }
+            
+            if let drawnRect = drawBlock(block, isHovered: isHovered) {
+                drawnRectsGlobal[i] = drawnRect
+                // Store local rect for overlap detection
+                if let screen = targetScreen ?? NSScreen.main {
+                    let localRect = CGRect(
+                        x: drawnRect.origin.x - screen.frame.origin.x,
+                        y: drawnRect.origin.y - screen.frame.origin.y,
+                        width: drawnRect.width,
+                        height: drawnRect.height
+                    )
+                    drawnLocalRects.append(localRect)
+                }
+            }
         }
     }
     
-    private func drawBlock(_ block: TranslatedTextBlock, isHovered: Bool) {
+    /// Estimate the rect that would be drawn for a block (for overlap detection)
+    private func estimateDrawnRect(for block: TranslatedTextBlock, center: CGPoint) -> CGRect {
+        let fontSize = max(CGFloat(translatorState.fontSize), 8)
+        let text = block.translatedText
+        let boxWidth = block.boundingBox.width
+        
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let wrapWidth = max(boxWidth, 120)
+        
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineBreakMode = .byWordWrapping
+        
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: para]
+        let textBounds = text.boundingRect(
+            with: CGSize(width: wrapWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin],
+            attributes: attrs
+        )
+        
+        let paddingH = CGFloat(translatorState.boxPaddingH)
+        let paddingV = CGFloat(translatorState.boxPaddingV)
+        let rectW = ceil(textBounds.width) + paddingH * 2 + 10
+        let rectH = ceil(textBounds.height) + paddingV * 2 + 10
+        
+        return CGRect(x: center.x - rectW/2, y: center.y - rectH/2, width: rectW, height: rectH)
+    }
+    
+    /// Draw a block and return its drawn rect in Cocoa global coordinates (for hit testing)
+    private func drawBlock(_ block: TranslatedTextBlock, isHovered: Bool) -> CGRect? {
         let box = block.boundingBox
-        guard box.width > 20, box.height > 15 else { return }
+        guard box.width > 20, box.height > 15 else { return nil }
         
         // Get local center coordinates for this screen
-        guard let localCenter = getLocalCenter(box) else { return }
+        guard let localCenter = getLocalCenter(box) else { return nil }
         
         let text = block.translatedText
         let fontSize = max(CGFloat(translatorState.fontSize), 8)
         
         // Check display mode: 0 = box, 1 = outline
+        let localRect: CGRect
         if translatorState.overlayDisplayMode == 1 {
-            drawOutlinedText(text: text, center: localCenter, fontSize: fontSize, boxWidth: box.width, isHovered: isHovered)
+            localRect = drawOutlinedText(text: text, center: localCenter, fontSize: fontSize, boxWidth: box.width, isHovered: isHovered)
         } else {
-            drawBoxText(text: text, center: localCenter, fontSize: fontSize, boxWidth: box.width, isHovered: isHovered)
+            localRect = drawBoxText(text: text, center: localCenter, fontSize: fontSize, boxWidth: box.width, isHovered: isHovered)
         }
+        
+        // Convert local rect to Cocoa global coordinates for hit testing
+        guard let screen = targetScreen ?? NSScreen.main else { return nil }
+        let globalRect = CGRect(
+            x: localRect.origin.x + screen.frame.origin.x,
+            y: localRect.origin.y + screen.frame.origin.y,
+            width: localRect.width,
+            height: localRect.height
+        )
+        
+        return globalRect
     }
     
     /// Draw text in a box with background (customizable style)
-    private func drawBoxText(text: String, center: CGPoint, fontSize: CGFloat, boxWidth: CGFloat, isHovered: Bool) {
+    /// Returns the drawn rect in view-local coordinates
+    private func drawBoxText(text: String, center: CGPoint, fontSize: CGFloat, boxWidth: CGFloat, isHovered: Bool) -> CGRect {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
         
         // Get customization settings
@@ -379,10 +465,13 @@ class RealTimeOverlayView: NSView {
         )
         
         text.draw(in: textRect, withAttributes: attrs)
+        
+        return rect
     }
     
     /// Draw text with outline stroke effect (subtitle style)
-    private func drawOutlinedText(text: String, center: CGPoint, fontSize: CGFloat, boxWidth: CGFloat, isHovered: Bool) {
+    /// Returns the drawn rect in view-local coordinates
+    private func drawOutlinedText(text: String, center: CGPoint, fontSize: CGFloat, boxWidth: CGFloat, isHovered: Bool) -> CGRect {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
         let outlineWidth = CGFloat(translatorState.outlineWidth)
         
@@ -447,6 +536,8 @@ class RealTimeOverlayView: NSView {
         }
         
         text.draw(in: textRect, withAttributes: mainAttrs)
+        
+        return textRect
     }
     
     override var isFlipped: Bool { false }

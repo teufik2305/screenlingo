@@ -31,6 +31,11 @@ actor TranslationService {
         llmApiUrl: String? = nil,
         llmApiKey: String? = nil,
         llmModel: String? = nil,
+        llmSystemPrompt: String? = nil,
+        llmAutoAppendLanguages: Bool = true,
+        llmConfidenceEnabled: Bool = false,
+        llmConfidenceThreshold: Int = 70,
+        llmMaxRetries: Int = 3,
         customApiUrl: String? = nil,
         forceSerbianLatin: Bool = false,
         timeout: TimeInterval = 30
@@ -42,13 +47,14 @@ actor TranslationService {
         let usedLibre: Bool
         let usedLLM: Bool
         
-        // Priority 1: LLM (OpenAI GPT / Claude)
+        // Priority 1: LLM (OpenAI GPT / Claude / Gemini)
         if useLLM {
             let url = llmApiUrl?.isEmpty == false ? llmApiUrl! : "https://api.openai.com/v1/chat/completions"
             let apiKey = llmApiKey ?? ""
             let model = llmModel?.isEmpty == false ? llmModel! : "gpt-4.1-mini"
+            let systemPrompt = llmSystemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? llmSystemPrompt : nil
             
-            provider = createLLMProvider(apiUrl: url, apiKey: apiKey, model: model)
+            provider = createLLMProvider(apiUrl: url, apiKey: apiKey, model: model, systemPrompt: systemPrompt, autoAppendLanguages: llmAutoAppendLanguages)
             (usedApple, usedLibre, usedLLM) = (false, false, true)
             log.debug("Using LLM provider: \(url)", category: .translation)
         }
@@ -90,23 +96,108 @@ actor TranslationService {
         }
         
         // Translate
-        var translatedText = try await provider.translate(text: text, from: sourceLang, to: targetLang, timeout: timeout)
+        var translatedText: String
+        var confidence: Int? = nil
+        
+        // Use confidence mode for LLM if enabled
+        if usedLLM && llmConfidenceEnabled {
+            let result = try await translateWithConfidenceRetry(
+                provider: provider,
+                text: text,
+                from: sourceLang,
+                to: targetLang,
+                timeout: timeout,
+                threshold: llmConfidenceThreshold,
+                maxRetries: llmMaxRetries
+            )
+            translatedText = result.text
+            confidence = result.confidence
+        } else {
+            translatedText = try await provider.translate(text: text, from: sourceLang, to: targetLang, timeout: timeout)
+        }
         
         // Apply Serbian Cyrillic → Latin transliteration if enabled and target is Serbian
         if forceSerbianLatin && targetLang.hasPrefix("sr") && SerbianTransliterator.containsCyrillic(translatedText) {
             translatedText = SerbianTransliterator.toLatin(translatedText)
         }
         
-        return TranslationResult(text: translatedText, usedAppleTranslation: usedApple, usedLibreTranslate: usedLibre, usedLLM: usedLLM)
+        return TranslationResult(text: translatedText, usedAppleTranslation: usedApple, usedLibreTranslate: usedLibre, usedLLM: usedLLM, confidence: confidence)
+    }
+    
+    /// Translate with confidence mode, retrying up to maxRetries times to get best result
+    private static func translateWithConfidenceRetry(
+        provider: TranslationProvider,
+        text: String,
+        from sourceLang: String,
+        to targetLang: String,
+        timeout: TimeInterval,
+        threshold: Int,
+        maxRetries: Int
+    ) async throws -> LLMTranslationResult {
+        var bestResult: LLMTranslationResult? = nil
+        var lastError: Error? = nil
+        
+        for attempt in 1...maxRetries {
+            do {
+                let result = try await provider.translateWithConfidence(
+                    text: text,
+                    from: sourceLang,
+                    to: targetLang,
+                    timeout: timeout
+                )
+                
+                log.debug("Confidence attempt \(attempt)/\(maxRetries): \(result.confidence)% (threshold: \(threshold)%)", category: .translation)
+                
+                // Keep best result
+                if bestResult == nil || result.confidence > bestResult!.confidence {
+                    bestResult = result
+                }
+                
+                // If confidence meets threshold, return immediately
+                if result.confidence >= threshold {
+                    if attempt > 1 {
+                        log.info("Confidence \(result.confidence)% met threshold on attempt \(attempt)", category: .translation)
+                    }
+                    return result
+                }
+                
+                // If this is the last attempt, return best result
+                if attempt == maxRetries {
+                    log.info("Max retries reached, using best confidence: \(bestResult!.confidence)%", category: .translation)
+                    return bestResult!
+                }
+                
+            } catch {
+                lastError = error
+                log.warning("Confidence attempt \(attempt) failed: \(error.localizedDescription)", category: .translation)
+                
+                // If we have a good result already, return it
+                if let best = bestResult, best.confidence >= threshold / 2 {
+                    return best
+                }
+            }
+        }
+        
+        // Return best result if we have one, otherwise throw
+        if let best = bestResult {
+            return best
+        }
+        throw lastError ?? TranslationError.translationFailed("All confidence attempts failed")
     }
     
     /// Create appropriate LLM provider based on API URL
-    private static func createLLMProvider(apiUrl: String, apiKey: String, model: String) -> TranslationProvider {
+    private static func createLLMProvider(apiUrl: String, apiKey: String, model: String, systemPrompt: String?, autoAppendLanguages: Bool) -> TranslationProvider {
+        let url = apiUrl.lowercased()
+        
         // Detect provider from URL
-        if apiUrl.lowercased().contains("anthropic") {
-            return AnthropicProvider(apiUrl: apiUrl, apiKey: apiKey, model: model)
+        if url.contains("anthropic") {
+            return AnthropicProvider(apiUrl: apiUrl, apiKey: apiKey, model: model, customSystemPrompt: systemPrompt, autoAppendLanguages: autoAppendLanguages)
+        } else if url.contains("generativelanguage.googleapis.com") && !url.contains("/openai/") {
+            // Native Gemini API (not OpenAI-compatible endpoint)
+            return GeminiProvider(apiKey: apiKey, model: model, customSystemPrompt: systemPrompt, autoAppendLanguages: autoAppendLanguages)
         } else {
-            return OpenAIProvider(apiUrl: apiUrl, apiKey: apiKey, model: model)
+            // OpenAI and OpenAI-compatible APIs (including Gemini's OpenAI endpoint, Ollama, etc.)
+            return OpenAIProvider(apiUrl: apiUrl, apiKey: apiKey, model: model, customSystemPrompt: systemPrompt, autoAppendLanguages: autoAppendLanguages)
         }
     }
     

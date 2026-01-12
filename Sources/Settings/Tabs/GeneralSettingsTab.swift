@@ -174,7 +174,7 @@ struct GeneralSettingsTab: View {
                                     .tint(.orange)
                                     
                                     Button("Gemini") {
-                                        state.llmApiUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                                        state.llmApiUrl = "https://generativelanguage.googleapis.com/v1beta"
                                         state.llmModel = "gemini-2.5-flash"
                                     }
                                     .font(.caption)
@@ -223,6 +223,159 @@ struct GeneralSettingsTab: View {
                                         .buttonStyle(.bordered)
                                         .tint(.gray)
                                     }
+                                }
+                                
+                                Divider()
+                                    .padding(.vertical, 4)
+                                
+                                // System prompt
+                                HStack {
+                                    Text("System Prompt")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    if !state.llmSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Button("Reset to Default") {
+                                            state.llmSystemPrompt = ""
+                                        }
+                                        .font(.caption2)
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.blue)
+                                    }
+                                }
+                                
+                                TextEditor(text: $state.llmSystemPrompt)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(minHeight: 80, maxHeight: 120)
+                                    .scrollContentBackground(.hidden)
+                                    .padding(8)
+                                    .background(Color(nsColor: .textBackgroundColor))
+                                    .cornerRadius(6)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                                    )
+                                
+                                Text("Use {source} and {target} as placeholders for language names. Leave empty for default.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                
+                                // Warning if placeholders are missing
+                                if state.llmSystemPromptMissingPlaceholders {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundStyle(.orange)
+                                            .font(.caption)
+                                        Text("Missing {source} or {target} placeholder")
+                                            .font(.caption)
+                                            .foregroundStyle(.orange)
+                                    }
+                                    .padding(.vertical, 6)
+                                    .padding(.horizontal, 10)
+                                    .background(Color.orange.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    
+                                    // Auto-append toggle
+                                    Toggle(isOn: $state.llmAutoAppendLanguages) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Auto-append language context")
+                                                .font(.caption)
+                                            Text("Automatically add \"\(TranslatorState.languageContextSuffix.trimmingCharacters(in: .whitespaces))\" to the prompt")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .toggleStyle(.switch)
+                                    .controlSize(.small)
+                                }
+                                
+                                Divider()
+                                    .padding(.vertical, 4)
+                                
+                                // Confidence mode
+                                Toggle(isOn: $state.llmConfidenceEnabled) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Confidence Mode")
+                                            .font(.caption)
+                                        Text("LLM rates translation quality. Retries if below threshold.")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                
+                                if state.llmConfidenceEnabled {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        // Confidence threshold
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack {
+                                                Text("Confidence Threshold")
+                                                    .font(.caption)
+                                                Spacer()
+                                                Text("\(state.llmConfidenceThreshold)%")
+                                                    .font(.system(.caption, design: .monospaced))
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            Slider(value: Binding(
+                                                get: { Double(state.llmConfidenceThreshold) },
+                                                set: { state.llmConfidenceThreshold = Int($0) }
+                                            ), in: 30...95, step: 5)
+                                            Text("Accept translation if confidence ≥ threshold")
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        
+                                        // Max retries
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack {
+                                                Text("Max Retries")
+                                                    .font(.caption)
+                                                Spacer()
+                                                Text("\(state.llmMaxRetries)")
+                                                    .font(.system(.caption, design: .monospaced))
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            Slider(value: Binding(
+                                                get: { Double(state.llmMaxRetries) },
+                                                set: { state.llmMaxRetries = Int($0) }
+                                            ), in: 1...5, step: 1)
+                                            Text("Retry up to N times if below threshold, keep best result")
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        
+                                        // Info about cost
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "info.circle.fill")
+                                                .foregroundStyle(.blue)
+                                                .font(.caption)
+                                            Text("Increases API calls by up to \(state.llmMaxRetries)x. Filters garbage translations.")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .padding(.vertical, 4)
+                                        .padding(.horizontal, 8)
+                                        .background(Color.blue.opacity(0.1))
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    }
+                                    .padding(.leading, 20)
+                                }
+                                
+                                // Show effective prompt when empty
+                                if state.llmSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Default prompt:")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                        Text(TranslatorState.defaultLLMSystemPrompt)
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                            .italic()
+                                    }
+                                    .padding(8)
+                                    .background(Color(nsColor: .windowBackgroundColor))
+                                    .cornerRadius(6)
                                 }
                             }
                             .transition(.opacity.combined(with: .move(edge: .top)))

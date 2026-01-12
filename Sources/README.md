@@ -11,9 +11,10 @@ Sources/
 │   └── WindowCaptureService.swift       # Screen capture
 │
 ├── Translation/            # Translation providers
-│   ├── TranslationService.swift         # Provider router
+│   ├── TranslationService.swift         # Provider router, confidence retry logic
 │   ├── TranslationProvider.swift        # Provider protocol
-│   └── Providers/                       # OpenAI, Anthropic, Google, Apple, LibreTranslate
+│   ├── TranslationResult.swift          # Result with confidence score
+│   └── Providers/                       # OpenAI, Anthropic, Gemini, Google, Apple, LibreTranslate
 │
 ├── State/                  # Application state
 │   ├── TranslatorState.swift            # Main state (ObservableObject)
@@ -57,6 +58,17 @@ Two rendering modes in `RealTimeOverlayView.swift`:
 - **Outline mode** (`drawOutlinedText`) - Text with stroke outline (subtitle-style)
 
 Settings in `TranslatorState`: `overlayDisplayMode`, `boxPaddingH/V`, `boxCornerRadius`, `boxBackgroundColorHex`, etc.
+
+### Confidence Mode (Beta)
+
+LLM providers can return confidence scores (0-100) with translations. When enabled:
+1. LLM returns JSON: `{"translation": "...", "confidence": 85}`
+2. If confidence < threshold, retry up to N times
+3. Keep best result across all attempts
+
+Settings: `llmConfidenceEnabled`, `llmConfidenceThreshold`, `llmMaxRetries`
+
+Implemented in `TranslationService.translateWithConfidenceRetry()` and provider `translateWithConfidence()` methods.
 
 ### New Manager
 
