@@ -4,15 +4,22 @@ import XCTest
 final class IgnorePatternManagerTests: XCTestCase {
     
     var manager: IgnorePatternManager!
+    var testStore: UserDefaults!
     
     override func setUp() {
         super.setUp()
-        manager = IgnorePatternManager()
+        // Use isolated UserDefaults for testing (doesn't affect user preferences)
+        testStore = UserDefaults(suiteName: "com.screenlingo.tests.ignorepatterns")!
+        testStore.removePersistentDomain(forName: "com.screenlingo.tests.ignorepatterns")
+        manager = IgnorePatternManager(store: testStore)
         // Clear any existing patterns
         manager.ignoredPatterns = []
     }
     
     override func tearDown() {
+        // Clean up test storage
+        testStore.removePersistentDomain(forName: "com.screenlingo.tests.ignorepatterns")
+        testStore = nil
         manager = nil
         super.tearDown()
     }

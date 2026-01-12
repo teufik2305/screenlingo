@@ -15,10 +15,14 @@ Or in Xcode: `Cmd+U`
 ```
 Tests/
 ├── CacheTests/
-│   └── TranslationCacheTests.swift     # Cache operations, LRU, normalization
+│   └── TranslationCacheTests.swift       # Cache operations, LRU, normalization
+├── EngineTests/
+│   └── WindowCaptureServiceTests.swift   # Image hashing, screen detection
 ├── ManagerTests/
-│   ├── ExcludedAppsManagerTests.swift  # App exclusion logic
-│   └── IgnorePatternManagerTests.swift # Pattern filtering
+│   ├── ExcludedAppsManagerTests.swift    # App exclusion logic
+│   └── IgnorePatternManagerTests.swift   # Pattern filtering
+├── StateTests/
+│   └── TranslatorStateTests.swift        # Settings, language utils, service detection
 ```
 
 ## Writing Tests
@@ -60,6 +64,32 @@ final class MyTests: XCTestCase {
 - One assertion per test when possible
 - Clean up in `tearDown`
 - Test edge cases: empty, nil, special chars, large inputs
+- **Use isolated storage** - never modify user preferences
+
+## Test Isolation
+
+Managers use UserDefaults for persistence. Tests MUST use isolated storage to avoid modifying user preferences:
+
+```swift
+var testStore: UserDefaults!
+
+override func setUp() {
+    super.setUp()
+    // Create isolated test storage
+    testStore = UserDefaults(suiteName: "com.screenlingo.tests.mytest")!
+    testStore.removePersistentDomain(forName: "com.screenlingo.tests.mytest")
+    
+    // Inject test store
+    manager = MyManager(store: testStore)
+}
+
+override func tearDown() {
+    // Clean up
+    testStore.removePersistentDomain(forName: "com.screenlingo.tests.mytest")
+    testStore = nil
+    super.tearDown()
+}
+```
 
 ## Adding Tests
 

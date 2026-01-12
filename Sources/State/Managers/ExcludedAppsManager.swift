@@ -3,25 +3,33 @@ import Combine
 
 /// Manages the list of excluded applications
 class ExcludedAppsManager: ObservableObject {
-    private static let preferencesStore = UserDefaults(suiteName: "com.screenlingo.shared")!
+    private static let defaultStore = UserDefaults(suiteName: "com.screenlingo.shared")!
     private static let key = "excludedApps"
     private static let defaultApps = "com.todesktop.230313mzl4w4u92,com.microsoft.VSCode,com.apple.dt.Xcode,com.apple.Terminal,com.googlecode.iterm2"
     
+    private let store: UserDefaults
     @Published var excludedApps: [String] = []
     
-    init() {
+    /// Initialize with default UserDefaults store (production)
+    convenience init() {
+        self.init(store: Self.defaultStore)
+    }
+    
+    /// Initialize with custom UserDefaults store (for testing)
+    init(store: UserDefaults) {
+        self.store = store
         load()
     }
     
     private func load() {
-        let string = Self.preferencesStore.string(forKey: Self.key) ?? Self.defaultApps
+        let string = store.string(forKey: Self.key) ?? Self.defaultApps
         excludedApps = string.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
         log.debug("Loaded \(excludedApps.count) excluded apps", category: .state)
     }
     
     private func save() {
         let string = excludedApps.joined(separator: ",")
-        Self.preferencesStore.set(string, forKey: Self.key)
+        store.set(string, forKey: Self.key)
     }
     
     func isAppExcluded(_ bundleIdentifier: String?) -> Bool {

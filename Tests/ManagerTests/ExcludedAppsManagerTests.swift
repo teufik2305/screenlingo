@@ -4,15 +4,22 @@ import XCTest
 final class ExcludedAppsManagerTests: XCTestCase {
     
     var manager: ExcludedAppsManager!
+    var testStore: UserDefaults!
     
     override func setUp() {
         super.setUp()
-        manager = ExcludedAppsManager()
+        // Use isolated UserDefaults for testing (doesn't affect user preferences)
+        testStore = UserDefaults(suiteName: "com.screenlingo.tests.excludedapps")!
+        testStore.removePersistentDomain(forName: "com.screenlingo.tests.excludedapps")
+        manager = ExcludedAppsManager(store: testStore)
         // Clear any existing apps
         manager.excludedApps = []
     }
     
     override func tearDown() {
+        // Clean up test storage
+        testStore.removePersistentDomain(forName: "com.screenlingo.tests.excludedapps")
+        testStore = nil
         manager = nil
         super.tearDown()
     }
