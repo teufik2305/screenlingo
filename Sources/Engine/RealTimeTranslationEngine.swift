@@ -29,6 +29,7 @@ class RealTimeTranslationEngine {
     private var lastImageHash: String = ""
     private var lastWindowPID: Int32 = 0
     private var lastAppName: String = ""
+    private var contentVersion: Int = 0  // Increments when content changes, used to discard stale translations
     
     // Timing
     private var isTranslating = false
@@ -226,7 +227,15 @@ class RealTimeTranslationEngine {
                     try await Task.sleep(nanoseconds: UInt64(translatorState.captureInterval * 1_000_000_000))
                     continue
                 }
+                
+                // Content changed - clear old overlay and increment version to invalidate in-flight translations
+                let contentChanged = !lastImageHash.isEmpty
+                if contentChanged {
+                    contentVersion += 1
+                    onClear()
+                }
                 lastImageHash = currentHash
+                let translationVersion = contentVersion  // Capture version for this batch
                 
                 let ocrStart = Date()
                 let textObservations = try await ocrProcessor.recognizeText(in: captureResult.image, sourceLanguage: sourceLanguage)
@@ -238,8 +247,8 @@ class RealTimeTranslationEngine {
                 // Fast path: if all texts are cached, update positions immediately
                 let (cachedBlocks, uncachedGroups) = separateCachedGroups(groupedObservations, windowBounds: captureResult.bounds)
                 
+                // Show cached blocks immediately (always, even if there are uncached)
                 if !cachedBlocks.isEmpty {
-                    // Update overlay with cached translations immediately
                     onUpdate(cachedBlocks, currentScreen)
                 }
                 
@@ -257,10 +266,17 @@ class RealTimeTranslationEngine {
                     let newBlocks = await translateGroups(uncachedGroups, windowBounds: captureResult.bounds)
                     isTranslating = false
                     
-                    if !newBlocks.isEmpty {
-                        log.blocksCreated(newBlocks.count)
-                        // Merge with cached blocks for complete update
-                        onUpdate(cachedBlocks + newBlocks, currentScreen)
+                    // Discard results if content changed while translating (stale positions)
+                    guard translationVersion == contentVersion else {
+                        log.debug("Discarding stale translation results (content changed)", category: .engine)
+                        continue
+                    }
+                    
+                    // Update with all available blocks (cached + new)
+                    let allBlocks = cachedBlocks + newBlocks
+                    if !allBlocks.isEmpty {
+                        log.blocksCreated(allBlocks.count)
+                        onUpdate(allBlocks, currentScreen)
                     }
                 }
                 

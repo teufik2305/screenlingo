@@ -65,6 +65,12 @@ class OCRProcessor {
                 continue 
             }
             
+            // Filter URL path fragments (e.g., "le-me/9/", "manga/chapter/123")
+            if isURLPathFragment(text) {
+                log.textIgnored(text, reason: "URL path")
+                continue
+            }
+            
             if text.contains("|") || text.contains("O|") { 
                 log.textIgnored(text, reason: "special chars")
                 continue 
@@ -117,6 +123,32 @@ class OCRProcessor {
             group.sorted { $0.1.minY > $1.1.minY }
                  .map { ($0.0, $0.1) }
         }
+    }
+    
+    /// Check if text looks like a URL path fragment (e.g., "le-me/9/", "manga/chapter/123")
+    private func isURLPathFragment(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Must contain a slash to be a path
+        guard trimmed.contains("/") else { return false }
+        
+        // Path patterns: contains slash followed by number, or multiple slashes
+        let slashCount = trimmed.filter { $0 == "/" }.count
+        if slashCount >= 2 { return true }
+        
+        // Single slash followed by digits (e.g., "/9/", "/123")
+        if let range = trimmed.range(of: #"/\d+"#, options: .regularExpression) {
+            // Check if most of the string is this path pattern
+            let pathPart = trimmed[range]
+            if pathPart.count >= trimmed.count / 2 { return true }
+        }
+        
+        // Starts with path-like pattern (hyphenated words + slash + number)
+        if trimmed.range(of: #"^[\w-]+/\d"#, options: .regularExpression) != nil {
+            return true
+        }
+        
+        return false
     }
     
     /// Check if text is a watermark or fragment

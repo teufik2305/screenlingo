@@ -67,6 +67,10 @@ LLM providers can return confidence scores (0-100) with translations. When enabl
 2. If confidence < threshold, retry up to N times
 3. Keep best result across all attempts
 
+**Custom prompts** work in confidence mode with these placeholders:
+- `{source}` / `{target}` - Language names (auto-appended if missing)
+- `{confidence}` - JSON structure placement (appended at end if not specified)
+
 Settings: `llmConfidenceEnabled`, `llmConfidenceThreshold`, `llmMaxRetries`
 
 Implemented in `TranslationService.translateWithConfidenceRetry()` and provider `translateWithConfidence()` methods.

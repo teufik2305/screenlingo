@@ -114,21 +114,42 @@ actor OpenAIProvider: TranslationProvider {
         let sourceLanguageName = sourceLang == "auto" ? "the source language (auto-detect)" : LanguageNameMapper.displayName(for: sourceLang)
         let targetLanguageName = LanguageNameMapper.displayName(for: targetLang)
         
-        // Confidence mode prompt - request JSON output
-        let systemPrompt = """
-        You are a professional translator. Translate the following text from \(sourceLanguageName) to \(targetLanguageName).
+        // Build the base prompt (custom or default)
+        var systemPrompt = customSystemPrompt ?? "You are a professional translator. Translate the following text from \(sourceLanguageName) to \(targetLanguageName)."
         
-        Respond ONLY with a JSON object in this exact format (no markdown, no extra text):
-        {"translation": "your translation here", "confidence": 85}
+        // Auto-append language context if placeholders are missing and auto-append is enabled
+        if let custom = customSystemPrompt, autoAppendLanguages {
+            let hasBothPlaceholders = custom.contains("{source}") && custom.contains("{target}")
+            if !hasBothPlaceholders {
+                systemPrompt += " Translate from {source} to {target}."
+            }
+        }
         
-        The confidence score (0-100) should reflect:
-        - 90-100: Clear, unambiguous text with accurate translation
-        - 70-89: Good translation but some ambiguity or context uncertainty
-        - 50-69: Partial or uncertain translation (unclear text, slang, or missing context)
-        - 0-49: Very uncertain (garbage text, unreadable, or not actual language)
+        // Confidence JSON structure
+        let confidenceStructure = """
+            Respond ONLY with a JSON object in this exact format (no markdown, no extra text):
+            {"translation": "your translation here", "confidence": 85}
+            
+            The confidence score (0-100) should reflect:
+            - 90-100: Clear, unambiguous text with accurate translation
+            - 70-89: Good translation but some ambiguity or context uncertainty
+            - 50-69: Partial or uncertain translation (unclear text, slang, or missing context)
+            - 0-49: Very uncertain (garbage text, unreadable, or not actual language)
+            
+            If the text appears to be garbage, random characters, or not real text, return low confidence.
+            """
         
-        If the text appears to be garbage, random characters, or not real text, return low confidence.
-        """
+        // Insert at {confidence} placeholder if present, otherwise append
+        if systemPrompt.contains("{confidence}") {
+            systemPrompt = systemPrompt.replacingOccurrences(of: "{confidence}", with: confidenceStructure)
+        } else {
+            systemPrompt += "\n\n" + confidenceStructure
+        }
+        
+        // Replace placeholders in prompt
+        let finalSystemPrompt = systemPrompt
+            .replacingOccurrences(of: "{source}", with: sourceLanguageName)
+            .replacingOccurrences(of: "{target}", with: targetLanguageName)
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -142,7 +163,7 @@ actor OpenAIProvider: TranslationProvider {
         let body: [String: Any] = [
             "model": model,
             "messages": [
-                ["role": "system", "content": systemPrompt],
+                ["role": "system", "content": finalSystemPrompt],
                 ["role": "user", "content": text]
             ],
             "temperature": 0.3,

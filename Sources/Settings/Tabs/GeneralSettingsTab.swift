@@ -256,7 +256,7 @@ struct GeneralSettingsTab: View {
                                             .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                                     )
                                 
-                                Text("Use {source} and {target} as placeholders for language names. Leave empty for default.")
+                                Text("Placeholders: {source}, {target} for languages. {confidence} for confidence mode JSON structure. Leave empty for default.")
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                                 
@@ -358,6 +358,35 @@ struct GeneralSettingsTab: View {
                                         .padding(.horizontal, 8)
                                         .background(Color.blue.opacity(0.1))
                                         .clipShape(RoundedRectangle(cornerRadius: 6))
+                                        
+                                        // Note about JSON structure for custom prompt
+                                        if !state.llmSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                            let hasConfidencePlaceholder = state.llmSystemPrompt.contains("{confidence}")
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                HStack(spacing: 6) {
+                                                    Image(systemName: hasConfidencePlaceholder ? "checkmark.circle.fill" : "doc.append.fill")
+                                                        .foregroundStyle(hasConfidencePlaceholder ? .green : .purple)
+                                                        .font(.caption)
+                                                    Text(hasConfidencePlaceholder 
+                                                         ? "{confidence} will be replaced with JSON structure:" 
+                                                         : "JSON structure will be appended (use {confidence} to place it):")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                Text("""
+                                                    {"translation": "...", "confidence": 85}
+                                                    """)
+                                                    .font(.system(.caption2, design: .monospaced))
+                                                    .foregroundStyle(.tertiary)
+                                                    .padding(6)
+                                                    .background(Color(nsColor: .textBackgroundColor))
+                                                    .cornerRadius(4)
+                                            }
+                                            .padding(.vertical, 4)
+                                            .padding(.horizontal, 8)
+                                            .background((hasConfidencePlaceholder ? Color.green : Color.purple).opacity(0.1))
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                        }
                                     }
                                     .padding(.leading, 20)
                                 }
