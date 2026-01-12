@@ -8,7 +8,8 @@ Sources/
 │   ├── RealTimeTranslationEngine.swift  # Main orchestrator
 │   ├── TranslationCache.swift           # LRU cache with persistence
 │   ├── OCRProcessor.swift               # Text recognition & grouping
-│   └── WindowCaptureService.swift       # Screen capture
+│   ├── WindowCaptureService.swift       # Screen capture
+│   └── ScrollMonitor.swift              # Scroll event detection
 │
 ├── Translation/            # Translation providers
 │   ├── TranslationService.swift         # Provider router, confidence retry logic

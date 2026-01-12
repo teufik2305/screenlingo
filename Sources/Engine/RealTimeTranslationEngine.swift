@@ -90,6 +90,18 @@ class RealTimeTranslationEngine {
         log.engineStarted()
         log.info("Source: \(sourceLanguage) -> Target: \(targetLanguage)", category: .engine)
         
+        // Start scroll detection if enabled
+        if translatorState.scrollDetectionEnabled {
+            ScrollMonitor.shared.cooldown = translatorState.scrollCooldown
+            ScrollMonitor.shared.onScrollStart = { [weak self] in
+                // Clear overlay when scrolling starts
+                self?.lastImageHash = ""  // Force re-process after scroll
+                self?.onClear()
+            }
+            ScrollMonitor.shared.startMonitoring()
+            log.info("Scroll detection enabled (cooldown: \(Int(translatorState.scrollCooldown * 1000))ms)", category: .engine)
+        }
+        
         // Log translation service
         if translatorState.useLLM {
             let provider = translatorState.detectedLLMProvider
@@ -123,6 +135,7 @@ class RealTimeTranslationEngine {
         isRunning = false
         captureTask?.cancel()
         captureTask = nil
+        ScrollMonitor.shared.stopMonitoring()
         log.engineStopped()
     }
     
@@ -201,6 +214,12 @@ class RealTimeTranslationEngine {
                 currentScreen = captureResult.screen
                 
                 log.windowCaptured(app: captureResult.appName, size: captureResult.bounds.size)
+                
+                // Skip processing while scrolling (if enabled)
+                if translatorState.scrollDetectionEnabled && ScrollMonitor.shared.isScrolling {
+                    try await Task.sleep(nanoseconds: UInt64(translatorState.captureInterval * 1_000_000_000))
+                    continue
+                }
                 
                 let currentHash = windowCapture.hashImage(captureResult.image)
                 if currentHash == lastImageHash {

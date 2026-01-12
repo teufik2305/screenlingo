@@ -141,6 +141,35 @@ struct AdvancedSettingsTab: View {
                         
                         Divider()
                         
+                        // Scroll Detection
+                        Toggle(isOn: $state.scrollDetectionEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Scroll Detection")
+                                Text(state.scrollDetectionEnabled ? "Pauses translation while scrolling" : "Translates during scrolling (more API calls)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        
+                        if state.scrollDetectionEnabled {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Scroll Cooldown")
+                                    Spacer()
+                                    Text("\(Int(state.scrollCooldown * 1000))ms")
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: $state.scrollCooldown, in: 0.2...1.0, step: 0.1)
+                                Text("Wait this long after scrolling stops before translating.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.leading, 20)
+                        }
+                        
+                        Divider()
+                        
                         // Cache
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {

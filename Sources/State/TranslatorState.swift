@@ -244,6 +244,14 @@ class TranslatorState: ObservableObject {
         didSet { log.info("LLM max retries: \(llmMaxRetries)", category: .settings) }
     }
     
+    // Scroll detection settings
+    @AppStorage("scrollDetectionEnabled", store: TranslatorState.preferencesStore) var scrollDetectionEnabled: Bool = true {
+        didSet { log.info("Scroll detection: \(scrollDetectionEnabled ? "enabled" : "disabled")", category: .settings) }
+    }
+    @AppStorage("scrollCooldown", store: TranslatorState.preferencesStore) var scrollCooldown: Double = 0.4 {
+        didSet { log.info("Scroll cooldown: \(Int(scrollCooldown * 1000))ms", category: .settings) }
+    }
+    
     /// Default system prompt for LLM translation (used when llmSystemPrompt is empty)
     static let defaultLLMSystemPrompt = "You are a professional translator. Translate the following text from {source} to {target}. Only respond with the translation, nothing else. Do not include explanations, notes, or quotation marks around the translation."
     
