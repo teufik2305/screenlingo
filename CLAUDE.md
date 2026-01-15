@@ -81,7 +81,7 @@ LLM provider selection in TranslationService.createLLMProvider() automatically c
 
 **RealTimeOverlayView** (Sources/RealTimeOverlayView.swift) supports two display modes:
 
-- **Box mode** (`overlayDisplayMode = 0`): Draws rounded rectangles with customizable background color, padding, border, shadow, and corner radius. Can cover original text if `boxCoverOriginal = true`.
+- **Box mode** (`overlayDisplayMode = 0`): Draws rounded rectangles with customizable background color, padding, border, shadow, and corner radius.
 - **Outline mode** (`overlayDisplayMode = 1`): Renders text with stroke outline (subtitle-style) using configurable outline width and colors.
 
 Settings controlled via TranslatorState: `overlayDisplayMode`, `boxPaddingH/V`, `boxCornerRadius`, `boxBackgroundColorHex`, `boxTextColorHex`, `boxBorderWidth`, `outlineWidth`, `outlineColorHex`, `textColorHex`.

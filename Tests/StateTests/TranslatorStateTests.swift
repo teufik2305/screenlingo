@@ -95,15 +95,6 @@ final class TranslatorStateTests: XCTestCase {
         XCTAssertEqual(state.boxShadowEnabled, !original)
     }
     
-    func testBoxCoverOriginal_CanToggle() {
-        // When
-        let original = state.boxCoverOriginal
-        state.boxCoverOriginal = !original
-        
-        // Then
-        XCTAssertEqual(state.boxCoverOriginal, !original)
-    }
-    
     // MARK: - Outline Settings
     
     func testOutlineWidth_CanSet() {

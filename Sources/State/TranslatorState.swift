@@ -118,9 +118,6 @@ class TranslatorState: ObservableObject {
     @AppStorage("boxShadowEnabled", store: TranslatorState.preferencesStore) var boxShadowEnabled: Bool = true {
         didSet { log.info("Box shadow: \(boxShadowEnabled ? "enabled" : "disabled")", category: .settings) }
     }
-    @AppStorage("boxCoverOriginal", store: TranslatorState.preferencesStore) var boxCoverOriginal: Bool = true {
-        didSet { log.info("Box cover original text: \(boxCoverOriginal ? "enabled" : "disabled")", category: .settings) }
-    }
     
     // MARK: Keyboard Shortcuts
     

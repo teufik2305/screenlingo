@@ -115,18 +115,6 @@ struct AppearanceSettingsTab: View {
                 if state.overlayDisplayMode == 0 {
                     settingsSection("Box Style") {
                         VStack(alignment: .leading, spacing: 12) {
-                            // Cover original text toggle
-                            Toggle(isOn: $state.boxCoverOriginal) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Cover Original Text")
-                                    Text("Adds solid background to hide text underneath (useful with low opacity)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
-                            
-                            Divider()
-                            
                             // Opacity
                             HStack {
                                 Text("Opacity")
@@ -271,8 +259,7 @@ struct AppearanceSettingsTab: View {
                         boxTextColorHex: state.boxTextColorHex,
                         boxBorderWidth: state.boxBorderWidth,
                         boxBorderColorHex: state.boxBorderColorHex,
-                        boxShadowEnabled: state.boxShadowEnabled,
-                        boxCoverOriginal: state.boxCoverOriginal
+                        boxShadowEnabled: state.boxShadowEnabled
                     )
                 }
             }

@@ -30,6 +30,9 @@ class RealTimeTranslationEngine {
     private var lastWindowPID: Int32 = 0
     private var lastAppName: String = ""
     private var contentVersion: Int = 0  // Increments when content changes, used to discard stale translations
+    private var consecutiveHashChanges: Int = 0  // Track consecutive hash changes to debounce
+    private let hashChangeThreshold: Int = 3  // Require 3 consecutive changes before clearing (reduces flicker from overlay drawing)
+    private var lastUpdateTime: Date?  // Track when we last sent an update to avoid clearing too soon
     
     // Timing
     private var isTranslating = false
@@ -190,6 +193,7 @@ class RealTimeTranslationEngine {
                     if !isInExcludedApp {
                         isInExcludedApp = true
                         log.appExcluded(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown")
+                        log.debug("Engine: App excluded, calling onClear()", category: .ui)
                         await MainActor.run { onClear() }
                     }
                     try await Task.sleep(nanoseconds: 200_000_000)
@@ -199,6 +203,7 @@ class RealTimeTranslationEngine {
                 if isInExcludedApp {
                     isInExcludedApp = false
                     lastImageHash = ""
+                    consecutiveHashChanges = 0  // Reset on app change
                     log.info("Returned from excluded app, forcing re-translation", category: .engine)
                 }
                 
@@ -206,6 +211,8 @@ class RealTimeTranslationEngine {
                 if captureResult.processID != lastWindowPID && lastWindowPID != 0 {
                     log.windowChanged(from: lastAppName, to: captureResult.appName)
                     lastImageHash = ""
+                    consecutiveHashChanges = 0  // Reset on window change
+                    log.debug("Engine: Window changed, calling onClear()", category: .ui)
                     onClear()
                 }
                 lastWindowPID = captureResult.processID
@@ -224,16 +231,33 @@ class RealTimeTranslationEngine {
                 
                 let currentHash = windowCapture.hashImage(captureResult.image)
                 if currentHash == lastImageHash {
+                    // Hash is same, reset consecutive change counter
+                    consecutiveHashChanges = 0
                     try await Task.sleep(nanoseconds: UInt64(translatorState.captureInterval * 1_000_000_000))
                     continue
                 }
                 
-                // Content changed - clear old overlay and increment version to invalidate in-flight translations
-                let contentChanged = !lastImageHash.isEmpty
+                // Hash changed - increment counter but only clear if threshold reached (debouncing)
+                consecutiveHashChanges += 1
+                
+                // Don't clear too soon after an update - the overlay drawing changes the screen hash
+                let updateCooldown: TimeInterval = 0.3  // 300ms cooldown after updates
+                let isInCooldown = lastUpdateTime != nil && Date().timeIntervalSince(lastUpdateTime!) < updateCooldown
+                
+                let contentChanged = !lastImageHash.isEmpty && consecutiveHashChanges >= hashChangeThreshold && !isInCooldown
+                
                 if contentChanged {
                     contentVersion += 1
+                    consecutiveHashChanges = 0  // Reset after clearing
+                    log.debug("Engine: Content changed (version \(contentVersion)), calling onClear()", category: .ui)
                     onClear()
+                } else if consecutiveHashChanges == 1 {
+                    log.debug("Engine: Hash changed but waiting for confirmation (changes: \(consecutiveHashChanges)/\(hashChangeThreshold))", category: .ui)
+                } else if isInCooldown && consecutiveHashChanges >= hashChangeThreshold {
+                    log.debug("Engine: Hash changed but in cooldown after update, skipping clear", category: .ui)
+                    consecutiveHashChanges = 0  // Reset to avoid immediate clear after cooldown
                 }
+                
                 lastImageHash = currentHash
                 let translationVersion = contentVersion  // Capture version for this batch
                 
@@ -249,6 +273,8 @@ class RealTimeTranslationEngine {
                 
                 // Show cached blocks immediately (always, even if there are uncached)
                 if !cachedBlocks.isEmpty {
+                    log.debug("Engine: Calling onUpdate with \(cachedBlocks.count) cached blocks (screen: \(currentScreen?.localizedName ?? "nil"))", category: .ui)
+                    lastUpdateTime = Date()
                     onUpdate(cachedBlocks, currentScreen)
                 }
                 
@@ -276,6 +302,8 @@ class RealTimeTranslationEngine {
                     let allBlocks = cachedBlocks + newBlocks
                     if !allBlocks.isEmpty {
                         log.blocksCreated(allBlocks.count)
+                        log.debug("Engine: Calling onUpdate with \(allBlocks.count) total blocks (\(cachedBlocks.count) cached + \(newBlocks.count) new) (screen: \(currentScreen?.localizedName ?? "nil"))", category: .ui)
+                        lastUpdateTime = Date()
                         onUpdate(allBlocks, currentScreen)
                     }
                 }

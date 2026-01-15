@@ -17,7 +17,6 @@ struct OverlayPreview: View {
     var boxBorderWidth: Double = 0
     var boxBorderColorHex: String = "#000000"
     var boxShadowEnabled: Bool = true
-    var boxCoverOriginal: Bool = true
     
     private func hexToColor(_ hex: String) -> Color {
         var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -85,8 +84,7 @@ struct OverlayPreview: View {
                     textColor: hexToColor(boxTextColorHex),
                     borderWidth: boxBorderWidth,
                     borderColor: hexToColor(boxBorderColorHex),
-                    shadowEnabled: boxShadowEnabled,
-                    coverOriginal: boxCoverOriginal
+                    shadowEnabled: boxShadowEnabled
                 )
             } else {
                 // Outline mode
@@ -116,7 +114,6 @@ struct BoxPreview: View {
     let borderWidth: Double
     let borderColor: Color
     let shadowEnabled: Bool
-    let coverOriginal: Bool
     
     var body: some View {
         Text(text)
@@ -125,16 +122,8 @@ struct BoxPreview: View {
             .padding(.horizontal, paddingH)
             .padding(.vertical, paddingV)
             .background(
-                ZStack {
-                    // Solid cover layer (to hide original text)
-                    if coverOriginal {
-                        RoundedRectangle(cornerRadius: cornerRadius)
-                            .fill(backgroundColor)
-                    }
-                    // Semi-transparent layer on top
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(backgroundColor.opacity(opacity))
-                }
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(backgroundColor)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius)

@@ -230,6 +230,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         )
         overlayView.targetScreen = screen
         window.contentView = overlayView
+        log.debug("Overlay window created - frame: (\(Int(screen.frame.minX)), \(Int(screen.frame.minY)), \(Int(screen.frame.width))x\(Int(screen.frame.height))), level: \(window.level.rawValue)", category: .ui)
         window.orderFrontRegardless()
         
         self.overlayWindow = window
@@ -240,12 +241,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             targetLanguage: translatorState.targetLanguage,
             translatorState: translatorState,
             onUpdate: { [weak self] textBlocks, targetScreen in
+                log.debug("Engine onUpdate callback triggered with \(textBlocks.count) blocks, dispatching to main thread", category: .ui)
                 DispatchQueue.main.async {
                     self?.handleOverlayUpdate(textBlocks: textBlocks, targetScreen: targetScreen)
                 }
             },
             onClear: { [weak self] in
+                log.debug("Engine onClear callback triggered, dispatching to main thread", category: .ui)
                 DispatchQueue.main.async {
+                    log.debug("onClear executing on main thread, calling overlayView?.clearBlocks()", category: .ui)
                     self?.overlayView?.clearBlocks()
                 }
             },
@@ -258,13 +262,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     
     /// Handle overlay updates with multi-monitor support
     private func handleOverlayUpdate(textBlocks: [TranslatedTextBlock], targetScreen: NSScreen?) {
+        log.debug("handleOverlayUpdate called on main thread with \(textBlocks.count) blocks, targetScreen: \(targetScreen?.localizedName ?? "nil"), currentScreen: \(currentTargetScreen?.localizedName ?? "nil")", category: .ui)
+        
         // If multi-monitor is enabled and screen changed, move overlay window
         if translatorState.multiMonitorEnabled,
            let newScreen = targetScreen,
            newScreen != currentTargetScreen {
+            log.debug("Screen changed, moving overlay from \(currentTargetScreen?.localizedName ?? "nil") to \(newScreen.localizedName)", category: .ui)
             moveOverlayToScreen(newScreen)
         }
         
+        log.debug("Calling overlayView?.updateTextBlocks(\(textBlocks.count) blocks)", category: .ui)
         overlayView?.updateTextBlocks(textBlocks)
     }
     
@@ -278,12 +286,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         overlayView?.targetScreen = screen
         
         // Update window frame to cover the target screen
+        log.debug("Setting window frame to (\(Int(screen.frame.minX)), \(Int(screen.frame.minY)), \(Int(screen.frame.width))x\(Int(screen.frame.height)))", category: .ui)
         window.setFrame(screen.frame, display: true, animate: false)
         
         // Also update the overlay view's frame
-        overlayView?.frame = CGRect(origin: .zero, size: screen.frame.size)
+        let newViewFrame = CGRect(origin: .zero, size: screen.frame.size)
+        log.debug("Setting overlay view frame to (\(Int(newViewFrame.minX)), \(Int(newViewFrame.minY)), \(Int(newViewFrame.width))x\(Int(newViewFrame.height)))", category: .ui)
+        overlayView?.frame = newViewFrame
         
         // Clear stable positions since we moved screens
+        log.debug("Clearing blocks due to screen move", category: .ui)
         overlayView?.clearBlocks()
     }
     
