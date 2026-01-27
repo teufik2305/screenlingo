@@ -236,3 +236,49 @@ actor MyProvider: TranslationProvider {
 3. **Window Changes**: Hash comparison detects content changes; switching windows forces re-translation
 4. **Concurrency**: Translation requests are limited by `maxConcurrentTranslations` to prevent overwhelming APIs
 5. **Text Filtering**: Engine filters out URLs, pipe characters, fragments (partial words), and user-defined ignore patterns
+6. **URL Validation**: All user-provided API URLs must be validated before use (see URL Validation section below)
+
+## URL Validation
+
+**CRITICAL**: Always validate and sanitize user-provided API URLs to prevent app loops and crashes.
+
+Use `URLValidator` from `Sources/State/Utilities/URLValidator.swift` for all URL validation:
+
+```swift
+// In settings UI (onChange handler)
+state.validateCustomApiUrl()      // Google API URLs
+state.validateLibreTranslateUrl() // LibreTranslate/LTEngine URLs
+state.validateLLMApiUrl()         // LLM provider URLs
+
+// Before API requests (in TranslationService)
+let (sanitizedUrl, validation) = URLValidator.validateAndSanitize(url)
+if !validation.isUsable {
+    log.error("Invalid URL: \(validation.message ?? "Unknown error"). Using default.", category: .translation)
+    url = defaultUrl
+}
+```
+
+### Blocked Placeholder Patterns
+
+The validator rejects URLs containing documentation placeholders that users might accidentally paste:
+- `PROJECT_ID`, `GEN_LANG_PROJECT_ID`, `YOUR_PROJECT_ID`
+- `YOUR_API_KEY`, `API_KEY_HERE`, `sk-your-api-key`
+- `${...}`, `{{...}}`, `<...>`, `[...]` template markers
+- `PLACEHOLDER`, `EXAMPLE`, `TODO`, `INSERT_`, `REPLACE_`
+
+### UI Feedback
+
+Use `URLValidationView` component to show validation status:
+```swift
+TextField("URL", text: $state.customApiUrl)
+    .onChange(of: state.customApiUrl) { _, _ in
+        state.validateCustomApiUrl()
+    }
+URLValidationView(validation: state.customApiUrlValidation)
+```
+
+### Key Files
+
+- `Sources/State/Utilities/URLValidator.swift` - Core validation logic
+- `Sources/Settings/Components/URLValidationView.swift` - UI feedback component
+- `TranslatorState.swift` - Validation methods and state properties

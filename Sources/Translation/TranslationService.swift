@@ -37,6 +37,7 @@ actor TranslationService {
         llmConfidenceThreshold: Int = 70,
         llmMaxRetries: Int = 3,
         customApiUrl: String? = nil,
+        googleApiKey: String? = nil,
         forceSerbianLatin: Bool = false,
         timeout: TimeInterval = 30
     ) async throws -> TranslationResult {
@@ -49,7 +50,16 @@ actor TranslationService {
         
         // Priority 1: LLM (OpenAI GPT / Claude / Gemini / Local-self-hosted LLM)
         if useLLM {
-            let url = llmApiUrl?.isEmpty == false ? llmApiUrl! : "https://api.openai.com/v1/chat/completions"
+            var url = llmApiUrl?.isEmpty == false ? llmApiUrl! : "https://api.openai.com/v1/chat/completions"
+            
+            // Validate and sanitize LLM URL
+            let (sanitizedUrl, validation) = URLValidator.validateAndSanitize(url)
+            if !validation.isUsable {
+                log.error("Invalid LLM API URL: \(validation.message ?? "Unknown error"). Using default.", category: .translation)
+                url = "https://api.openai.com/v1/chat/completions"
+            } else {
+                url = sanitizedUrl
+            }
             let apiKey = llmApiKey ?? ""
             let model = llmModel?.isEmpty == false ? llmModel! : "gpt-4.1-mini"
             let systemPrompt = llmSystemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? llmSystemPrompt : nil
@@ -60,8 +70,17 @@ actor TranslationService {
         }
         // Priority 2: LibreTranslate / LTEngine (self-hosted)
         else if useLibreTranslate {
-            let url = libreTranslateUrl?.isEmpty == false ? libreTranslateUrl! : defaultLibreTranslateUrl
+            var url = libreTranslateUrl?.isEmpty == false ? libreTranslateUrl! : defaultLibreTranslateUrl
             let apiKey = libreTranslateApiKey?.isEmpty == false ? libreTranslateApiKey : nil
+            
+            // Validate and sanitize LibreTranslate URL
+            let (sanitizedUrl, validation) = URLValidator.validateAndSanitize(url)
+            if !validation.isUsable {
+                log.error("Invalid LibreTranslate URL: \(validation.message ?? "Unknown error"). Using default.", category: .translation)
+                url = defaultLibreTranslateUrl
+            } else {
+                url = sanitizedUrl
+            }
             
             provider = LibreTranslateProvider(apiUrl: url, apiKey: apiKey)
             (usedApple, usedLibre, usedLLM) = (false, true, false)
@@ -81,16 +100,38 @@ actor TranslationService {
                     log.appleTranslationFallback()
                     hasLoggedFallbackWarning = true
                 }
-                let apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
-                provider = GoogleTranslateProvider(apiUrl: apiUrl)
+                var apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
+                let apiKey = googleApiKey ?? ""
+                
+                // Validate and sanitize Google API URL
+                let (sanitizedUrl, validation) = URLValidator.validateAndSanitize(apiUrl)
+                if !validation.isUsable {
+                    log.error("Invalid Google API URL: \(validation.message ?? "Unknown error"). Using default.", category: .translation)
+                    apiUrl = defaultApiUrl
+                } else {
+                    apiUrl = sanitizedUrl
+                }
+                
+                provider = GoogleTranslateProvider(apiUrl: apiUrl, apiKey: apiKey)
                 (usedApple, usedLibre, usedLLM) = (false, false, false)
                 log.debug("Using Google Translate (fallback): \(apiUrl)", category: .translation)
             }
         }
         // Priority 4: Google Translate API (fallback)
         else {
-            let apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
-            provider = GoogleTranslateProvider(apiUrl: apiUrl)
+            var apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
+            let apiKey = googleApiKey ?? ""
+            
+            // Validate and sanitize Google API URL
+            let (sanitizedUrl, validation) = URLValidator.validateAndSanitize(apiUrl)
+            if !validation.isUsable {
+                log.error("Invalid Google API URL: \(validation.message ?? "Unknown error"). Using default.", category: .translation)
+                apiUrl = defaultApiUrl
+            } else {
+                apiUrl = sanitizedUrl
+            }
+            
+            provider = GoogleTranslateProvider(apiUrl: apiUrl, apiKey: apiKey)
             (usedApple, usedLibre, usedLLM) = (false, false, false)
             log.debug("Using Google Translate: \(apiUrl)", category: .translation)
         }

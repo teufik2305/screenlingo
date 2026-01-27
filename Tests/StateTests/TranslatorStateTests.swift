@@ -220,12 +220,12 @@ final class TranslatorStateTests: XCTestCase {
         XCTAssertEqual(state.detectedLLMProvider, .anthropic)
     }
     
-    func testDetectedLLMProvider_Ollama() {
+    func testDetectedLLMProvider_Local() {
         // Given
         state.llmApiUrl = "http://localhost:11434/api/chat"
         
         // Then
-        XCTAssertEqual(state.detectedLLMProvider, .ollama)
+        XCTAssertEqual(state.detectedLLMProvider, .local)
     }
     
     // MARK: - Cache Path

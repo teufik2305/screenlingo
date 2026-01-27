@@ -29,6 +29,14 @@ Project-specific conventions and patterns
 - Manager integration: create `ObservableObject` managers under `Sources/State/Managers` and forward their `objectWillChange` into `TranslatorState` (use Combine sink and store cancellables).
 - Caching: `TranslationCache` is LRU, normalizes keys (whitespace/case); prefer using it before calling external providers.
 - Logging: use `log.info/debug/error(..., category: .engine/.ocr/.translation/.cache/.ui/.settings)` consistently (see `Logger.swift`).
+- URL validation: **ALWAYS** validate user-provided API URLs using `URLValidator` before use (see below).
+
+URL validation (critical for stability)
+- Use `URLValidator` from `Sources/State/Utilities/URLValidator.swift` for all API URL validation.
+- Blocked patterns: `PROJECT_ID`, `YOUR_API_KEY`, `${...}`, `{{...}}`, `PLACEHOLDER`, etc.
+- In settings UI: call `state.validateCustomApiUrl()` / `validateLibreTranslateUrl()` / `validateLLMApiUrl()` on `onChange`.
+- In TranslationService: use `URLValidator.validateAndSanitize(url)` before API calls; fall back to defaults if invalid.
+- Show validation feedback with `URLValidationView` component in settings forms.
 
 How to add common items (copy/paste snippets)
 - New translation provider:
@@ -45,6 +53,7 @@ Tests and test conventions
 What to check when editing behavior
 - If changing translation flow, update `RealTimeTranslationEngine` and `TranslationService` together — both orchestrate retries, caching, and confidence-mode logic.
 - If overlay appearance changes, update `RealTimeOverlayView` and the corresponding `TranslatorState` settings.
+- If adding/modifying URL input fields, add `URLValidator` validation and `URLValidationView` feedback.
 
 Files to open first when triaging a change
 - `Sources/Engine/RealTimeTranslationEngine.swift`

@@ -208,7 +208,17 @@ class TranslatorState: ObservableObject {
         }
     }
     @AppStorage("customApiUrl", store: TranslatorState.preferencesStore) var customApiUrl: String = ""
-    @AppStorage("googleApiKey", store: TranslatorState.preferencesStore) var googleApiKey: String = ""  // Optional API key for Google Translate
+    @AppStorage("googleApiKey", store: TranslatorState.preferencesStore) var googleApiKey: String = ""  // API key for Google Translate V2
+    @AppStorage("googleAccessToken", store: TranslatorState.preferencesStore) var googleAccessToken: String = ""  // OAuth2 access token for Google Translate V3
+    
+    /// Get the appropriate credential for the current Google API version
+    var googleCredential: String {
+        if isGoogleCloudV3Api {
+            return googleAccessToken
+        } else {
+            return googleApiKey
+        }
+    }
     
     // LibreTranslate/LTEngine settings
     @AppStorage("libreTranslateUrl", store: TranslatorState.preferencesStore) var libreTranslateUrl: String = "http://localhost:5000/translate" {
@@ -509,7 +519,119 @@ class TranslatorState: ObservableObject {
         fetchLTEngineLanguages(force: true)
     }
     
+    // MARK: URL Validation
+    
+    /// Validation result for custom Google API URL
+    @Published var customApiUrlValidation: URLValidator.ValidationResult = .valid
+    
+    /// Validation result for LibreTranslate URL
+    @Published var libreTranslateUrlValidation: URLValidator.ValidationResult = .valid
+    
+    /// Validation result for LLM API URL
+    @Published var llmApiUrlValidation: URLValidator.ValidationResult = .valid
+    
+    /// Validate and sanitize the custom Google API URL
+    func validateCustomApiUrl() {
+        let (sanitized, _) = URLValidator.validateAndSanitize(customApiUrl)
+        if sanitized != customApiUrl {
+            customApiUrl = sanitized
+        }
+        customApiUrlValidation = URLValidator.validateGoogleApiUrl(sanitized)
+        if case .invalid(let reason) = customApiUrlValidation {
+            log.warning("Invalid Google API URL: \(reason)", category: .settings)
+        }
+    }
+    
+    /// Validate and sanitize the LibreTranslate URL
+    func validateLibreTranslateUrl() {
+        let (sanitized, _) = URLValidator.validateAndSanitize(libreTranslateUrl)
+        if sanitized != libreTranslateUrl && !sanitized.isEmpty {
+            libreTranslateUrl = sanitized
+        }
+        libreTranslateUrlValidation = URLValidator.validateLibreTranslateUrl(sanitized)
+        if case .invalid(let reason) = libreTranslateUrlValidation {
+            log.warning("Invalid LibreTranslate URL: \(reason)", category: .settings)
+        }
+    }
+    
+    /// Validate and sanitize the LLM API URL
+    func validateLLMApiUrl() {
+        let (sanitized, _) = URLValidator.validateAndSanitize(llmApiUrl)
+        if sanitized != llmApiUrl && !sanitized.isEmpty {
+            llmApiUrl = sanitized
+        }
+        llmApiUrlValidation = URLValidator.validateLLMApiUrl(sanitized)
+        if case .invalid(let reason) = llmApiUrlValidation {
+            log.warning("Invalid LLM API URL: \(reason)", category: .settings)
+        }
+    }
+    
+    /// Check if the current Google API URL is safe to use
+    var isCustomApiUrlValid: Bool {
+        customApiUrl.isEmpty || customApiUrlValidation.isUsable
+    }
+    
+    /// Check if the current LibreTranslate URL is safe to use  
+    var isLibreTranslateUrlValid: Bool {
+        libreTranslateUrlValidation.isUsable
+    }
+    
+    /// Check if the current LLM API URL is safe to use
+    var isLLMApiUrlValid: Bool {
+        llmApiUrlValidation.isUsable
+    }
+    
+    /// Get the effective (validated) custom API URL, or nil if invalid
+    var effectiveCustomApiUrl: String? {
+        guard isCustomApiUrlValid else { return nil }
+        let trimmed = customApiUrl.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+    
+    /// Get the effective (validated) LibreTranslate URL
+    var effectiveLibreTranslateUrl: String {
+        guard isLibreTranslateUrlValid else {
+            return TranslationService.defaultLibreTranslateUrl
+        }
+        return libreTranslateUrl
+    }
+    
+    /// Get the effective (validated) LLM API URL
+    var effectiveLLMApiUrl: String {
+        guard isLLMApiUrlValid else {
+            return "https://api.openai.com/v1/chat/completions"
+        }
+        return llmApiUrl
+    }
+    
     // MARK: Google Translate Custom API
+    
+    /// Check if the custom API URL is a Google Cloud v3 API URL (including beta versions like v3beta1, v3p1beta1)
+    var isGoogleCloudV3Api: Bool {
+        // Match /v3/, /v3:, /v3beta1/, /v3p1beta1/, etc.
+        if let regex = try? NSRegularExpression(pattern: #"/v3[a-z0-9]*[/:]"#, options: .caseInsensitive) {
+            let range = NSRange(customApiUrl.startIndex..., in: customApiUrl)
+            return regex.firstMatch(in: customApiUrl, range: range) != nil
+        }
+        return false
+    }
+    
+    /// Check if the custom API URL is a Google Cloud v2 API URL
+    var isGoogleCloudV2Api: Bool {
+        customApiUrl.contains("/v2") || customApiUrl.contains("translation.googleapis.com/language/translate")
+    }
+    
+    /// Extract the project parent path from a Google Cloud v3 URL
+    /// e.g., "https://translate.googleapis.com/v3/projects/my-project:translateText" -> "projects/my-project"
+    var googleCloudV3Parent: String? {
+        guard isGoogleCloudV3Api else { return nil }
+        
+        // Match projects/{project-id} part
+        if let range = customApiUrl.range(of: #"projects/[^/:]+"#, options: .regularExpression) {
+            return String(customApiUrl[range])
+        }
+        return nil
+    }
     
     // Computed property to get the base URL for Google custom API
     var googleBaseUrl: String {
@@ -518,7 +640,7 @@ class TranslatorState: ObservableObject {
             return ""  // No custom URL, use default behavior
         }
         // Remove common suffixes to get base URL
-        for suffix in ["/translate", "/languages", "/v2", "/v3"] {
+        for suffix in ["/translate", "/languages", "/v2", "/v3", ":translateText", ":detectLanguage"] {
             if url.hasSuffix(suffix) {
                 url = String(url.dropLast(suffix.count))
             }
@@ -551,23 +673,31 @@ class TranslatorState: ObservableObject {
         }
         
         // Determine the languages endpoint based on URL pattern
-        let baseUrl = googleBaseUrl
         var urlString: String
         
-        // Check if it looks like a Google Cloud v3 API URL
-        if baseUrl.contains("/v3/") || baseUrl.contains("translation.googleapis.com") {
-            // Google Cloud Translation API v3: /supportedLanguages endpoint
-            urlString = "\(baseUrl)/supportedLanguages"
+        if isGoogleCloudV2Api {
+            // Google Cloud Translation API v2: GET /language/translate/v2/languages
+            // https://translation.googleapis.com/language/translate/v2/languages?key=API_KEY&target=en
+            urlString = "https://translation.googleapis.com/language/translate/v2/languages"
+        } else if isGoogleCloudV3Api, let parent = googleCloudV3Parent {
+            // Google Cloud Translation API v3: GET /v3/{parent}/supportedLanguages
+            // e.g., https://translate.googleapis.com/v3/projects/my-project/supportedLanguages
+            urlString = "https://translate.googleapis.com/v3/\(parent)/supportedLanguages"
         } else {
             // LibreTranslate or other: /languages endpoint
+            let baseUrl = googleBaseUrl
             urlString = "\(baseUrl)/languages"
         }
         
-        // Add API key as query parameter if provided (for Google Cloud API)
+        // Add API key and display language as query parameters
         var finalUrlString = urlString
         if !googleApiKey.isEmpty {
             let separator = urlString.contains("?") ? "&" : "?"
             finalUrlString = "\(urlString)\(separator)key=\(googleApiKey)"
+            // Add target language to get localized names (for v2 API)
+            if isGoogleCloudV2Api {
+                finalUrlString += "&target=en"
+            }
         }
         
         guard let url = URL(string: finalUrlString) else {
@@ -578,15 +708,12 @@ class TranslatorState: ObservableObject {
         isLoadingGoogleLanguages = true
         lastGoogleFetchAttempt = Date()
         
+        log.debug("Fetching languages from: \(urlString)", category: .api)
+        
         Task {
             do {
                 var request = URLRequest(url: url)
                 request.timeoutInterval = apiTimeout
-                
-                // Also add API key as header for services that expect it there
-                if !googleApiKey.isEmpty {
-                    request.setValue("Bearer \(googleApiKey)", forHTTPHeaderField: "Authorization")
-                }
                 
                 let (data, response) = try await URLSession.shared.data(for: request)
                 
@@ -606,11 +733,13 @@ class TranslatorState: ObservableObject {
                         self.googleLanguages = languageTuples
                         self.isLoadingGoogleLanguages = false
                         self.googleLanguagesError = nil
+                        log.info("Loaded \(languageTuples.count) languages (LibreTranslate format)", category: .api)
                     }
                     return
                 }
                 
                 // Try Google Cloud Translation API v3 format
+                // Response: { "languages": [{ "languageCode": "en", "displayName": "English", "supportSource": true, "supportTarget": true }] }
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let languagesArray = json["languages"] as? [[String: Any]] {
                     let languageTuples = languagesArray.compactMap { lang -> (String, String)? in
@@ -623,6 +752,7 @@ class TranslatorState: ObservableObject {
                             self.googleLanguages = languageTuples
                             self.isLoadingGoogleLanguages = false
                             self.googleLanguagesError = nil
+                            log.info("Loaded \(languageTuples.count) languages (Google Cloud v3 format)", category: .api)
                         }
                         return
                     }
@@ -642,6 +772,7 @@ class TranslatorState: ObservableObject {
                             self.googleLanguages = languageTuples
                             self.isLoadingGoogleLanguages = false
                             self.googleLanguagesError = nil
+                            log.info("Loaded \(languageTuples.count) languages (Google Cloud v2 format)", category: .api)
                         }
                         return
                     }
@@ -660,6 +791,7 @@ class TranslatorState: ObservableObject {
                             self.googleLanguages = languageTuples
                             self.isLoadingGoogleLanguages = false
                             self.googleLanguagesError = nil
+                            log.info("Loaded \(languageTuples.count) languages (simple array format)", category: .api)
                         }
                         return
                     }

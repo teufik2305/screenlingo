@@ -71,6 +71,12 @@ struct GeneralSettingsTab: View {
                                 TextField("http://localhost:5000/translate", text: $state.libreTranslateUrl)
                                     .textFieldStyle(.roundedBorder)
                                     .font(.system(.body, design: .monospaced))
+                                    .onChange(of: state.libreTranslateUrl) { _, _ in
+                                        state.validateLibreTranslateUrl()
+                                    }
+                                
+                                // URL validation feedback
+                                URLValidationView(validation: state.libreTranslateUrlValidation)
                                 
                                 Text("API Key (optional)")
                                     .font(.caption)
@@ -102,14 +108,19 @@ struct GeneralSettingsTab: View {
                                     .textFieldStyle(.roundedBorder)
                                     .font(.system(.body, design: .monospaced))
                                     .onChange(of: state.customApiUrl) { _, newValue in
+                                        // Validate URL
+                                        state.validateCustomApiUrl()
                                         // Clear cached languages when URL changes
                                         state.googleLanguages = []
                                         state.googleLanguagesError = nil
-                                        // Fetch languages if custom URL is set
-                                        if !newValue.trimmingCharacters(in: .whitespaces).isEmpty {
+                                        // Fetch languages if custom URL is set and valid
+                                        if !newValue.trimmingCharacters(in: .whitespaces).isEmpty && state.isCustomApiUrlValid {
                                             state.fetchGoogleLanguages(force: true)
                                         }
                                     }
+                                
+                                // URL validation feedback
+                                URLValidationView(validation: state.customApiUrlValidation)
                                 
                                 if state.customApiUrl.isEmpty {
                                     Text("Using default: \(TranslationService.defaultApiUrl)")
@@ -117,13 +128,74 @@ struct GeneralSettingsTab: View {
                                         .foregroundStyle(.tertiary)
                                 }
                                 
-                                Text("API Key (optional)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                // V3 API - requires OAuth2 access token
+                                if state.isGoogleCloudV3Api {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "info.circle.fill")
+                                            .foregroundStyle(.blue)
+                                            .font(.caption)
+                                        Text("V3 API requires OAuth2 Access Token from: gcloud auth print-access-token")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.vertical, 6)
+                                    .padding(.horizontal, 10)
+                                    .background(Color.blue.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    
+                                    Text("Access Token")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    
+                                    SecureField("Paste token from: gcloud auth print-access-token", text: $state.googleAccessToken)
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.system(.body, design: .monospaced))
+                                    
+                                    Text("Tokens expire after ~1 hour. Regenerate with: gcloud auth print-access-token")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
                                 
-                                SecureField("Leave empty if not required", text: $state.googleApiKey)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(.body, design: .monospaced))
+                                // V2 API or default - uses API key
+                                if state.isGoogleCloudV2Api || !state.isGoogleCloudV3Api {
+                                    Text(state.isGoogleCloudV2Api ? "API Key (required)" : "API Key (optional)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    
+                                    SecureField(state.isGoogleCloudV2Api ? "Your Google Cloud API key (AIza...)" : "Leave empty for free API", text: $state.googleApiKey)
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.system(.body, design: .monospaced))
+                                }
+                                
+                                // Quick preset buttons for Google APIs
+                                HStack(spacing: 8) {
+                                    Text("Presets:")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    
+                                    Button("Free") {
+                                        state.customApiUrl = ""
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.bordered)
+                                    .tint(.green)
+                                    
+                                    Button("V2 (API key)") {
+                                        state.customApiUrl = "https://translation.googleapis.com/language/translate/v2"
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.bordered)
+                                    .tint(.blue)
+                                    
+                                    Button("V3 (OAuth)") {
+                                        // Set a template URL - user must replace with their project ID
+                                        state.customApiUrl = "https://translate.googleapis.com/v3/projects/your-project-id:translateText"
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.bordered)
+                                    .tint(.orange)
+                                    .help("Replace 'your-project-id' with your Google Cloud project ID")
+                                }
                             }
                             .transition(.opacity.combined(with: .move(edge: .top)))
                             
@@ -166,6 +238,12 @@ struct GeneralSettingsTab: View {
                                 TextField("https://api.openai.com/v1/chat/completions", text: $state.llmApiUrl)
                                     .textFieldStyle(.roundedBorder)
                                     .font(.system(.body, design: .monospaced))
+                                    .onChange(of: state.llmApiUrl) { _, _ in
+                                        state.validateLLMApiUrl()
+                                    }
+                                
+                                // URL validation feedback
+                                URLValidationView(validation: state.llmApiUrlValidation)
                                 
                                 // Quick URL buttons
                                 HStack(spacing: 8) {

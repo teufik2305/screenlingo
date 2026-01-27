@@ -454,6 +454,7 @@ class RealTimeTranslationEngine {
                                     llmConfidenceThreshold: translatorState.llmConfidenceThreshold,
                                     llmMaxRetries: translatorState.llmMaxRetries,
                                     customApiUrl: translatorState.customApiUrl.isEmpty ? nil : translatorState.customApiUrl,
+                                    googleApiKey: translatorState.googleCredential.isEmpty ? nil : translatorState.googleCredential,
                                     forceSerbianLatin: translatorState.forceSerbianLatin,
                                     timeout: translatorState.apiTimeout
                                 )
