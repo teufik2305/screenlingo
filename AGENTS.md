@@ -9,6 +9,7 @@ This file provides guidance for AI coding agents working on the ScreenLingo code
 ### Key Features
 
 - Real-time OCR text detection using Apple Vision framework
+- **Agentic Document Extraction (ADE)** - LLM-powered text extraction using vision models (Gemini, Claude, OpenAI, Local/Ollama)
 - Multiple translation backends: Apple Translation, LibreTranslate, Google Translate, LLM (OpenAI/Claude/Gemini/Ollama)
 - Multi-monitor support - overlay follows windows across displays
 - Two display modes: Box (customizable background) or Outline (subtitle-style stroke)
@@ -47,7 +48,15 @@ Sources/
 │   ├── OCRProcessor.swift               # Text detection and grouping
 │   ├── WindowCaptureService.swift       # Screen capture and window detection
 │   ├── TranslationCache.swift           # LRU cache with persistence
-│   └── ScrollMonitor.swift              # Scroll detection
+│   ├── ScrollMonitor.swift              # Scroll detection
+│   └── ADE/                             # Agentic Document Extraction
+│       ├── ADEAgent.swift               # Main ADE orchestrator
+│       ├── ADEModels.swift              # ADE data models & provider detection
+│       └── Providers/                   # ADE provider implementations
+│           ├── ADEGeminiProvider.swift      # Google Gemini vision API
+│           ├── ADEAnthropicProvider.swift   # Anthropic Claude vision
+│           ├── ADECustomProvider.swift      # OpenAI-compatible APIs
+│           └── ADELocalProvider.swift       # Local Ollama/vLLM
 ├── Translation/
 │   ├── TranslationService.swift         # Provider routing
 │   ├── TranslationProvider.swift        # Protocol definition
@@ -83,6 +92,11 @@ Sources/
     └── Layouts/                          # Custom layout helpers
 
 Tests/
+├── ADETests/
+│   ├── ADEDetectedProviderTests.swift     # Provider auto-detection
+│   ├── ADECacheTests.swift                # Perceptual hash caching
+│   ├── ADECoordinateTests.swift           # Coordinate conversion
+│   └── ADEErrorTests.swift                # Error handling & models
 ├── CacheTests/
 │   └── TranslationCacheTests.swift
 ├── EngineTests/
@@ -134,7 +148,9 @@ swift package clean
 
 1. **RealTimeTranslationEngine** orchestrates the translation pipeline
 2. **WindowCaptureService** captures screenshots of frontmost window (~50ms intervals)
-3. **OCRProcessor** uses Vision.framework to detect text regions and groups them
+3. **Text Extraction** - Either:
+   - **ADEAgent** (if enabled) - Uses vision LLMs (Gemini, Claude, etc.) to extract text blocks
+   - **OCRProcessor** (fallback) - Uses Vision.framework to detect text regions
 4. **TranslationCache** (LRU with persistence) checks for cached translations
 5. **TranslationService** routes uncached text to appropriate provider
 6. **RealTimeOverlayView** renders translated text over original content
@@ -256,6 +272,7 @@ Always validate user-provided API URLs:
 state.validateCustomApiUrl()
 state.validateLibreTranslateUrl()
 state.validateLLMApiUrl()
+state.validateADEApiUrl()  // For ADE provider URL
 
 // Before API requests
 let (sanitizedUrl, validation) = URLValidator.validateAndSanitize(url)
@@ -306,6 +323,26 @@ This prevents users from accidentally using example URLs from documentation.
 3. Add routing logic in `TranslationService.translate()`
 4. Add enum case to `TranslationServiceType`
 
+### New ADE Provider
+
+1. Create `Sources/Engine/ADE/Providers/YourADEProvider.swift`
+2. Implement `ADEProviderInterface` protocol as an `actor`:
+   ```swift
+   protocol ADEProviderInterface {
+       func extract(request: ADERequest) async throws -> ADEResponse
+       func checkAvailability() async throws -> Bool
+   }
+   ```
+3. Add routing in `ADEAgent.createADEProvider()` based on URL pattern detection
+4. The provider returns `ExtractedTextBlock` with normalized coordinates (0-1)
+
+**Provider Auto-Detection:**
+- Gemini: URL contains `generativelanguage.googleapis.com`
+- Anthropic: URL contains `anthropic.com`
+- OpenAI: URL contains `openai.com`
+- Local/Ollama: URL contains `localhost` or `127.0.0.1`
+- Custom: Any other URL (OpenAI-compatible)
+
 ### New Manager
 
 1. Create `Sources/State/Managers/YourManager.swift` as `ObservableObject`
@@ -328,6 +365,8 @@ This prevents users from accidentally using example URLs from documentation.
 4. **Concurrency**: Translation requests limited by `maxConcurrentTranslations`
 5. **Text Filtering**: URLs, pipe characters, fragments, and ignore patterns are filtered
 6. **Hash Debouncing**: Requires 3 consecutive changes before clearing (reduces overlay flicker)
+7. **ADE Caching**: Perceptual hash-based caching prevents duplicate extractions
+8. **ADE Fallback**: Falls back to OCR if ADE fails (model unavailable, network error, etc.)
 
 ## Key File References
 
@@ -339,6 +378,8 @@ This prevents users from accidentally using example URLs from documentation.
 - `Sources/Engine/TranslationCache.swift` - LRU cache implementation
 - `Sources/Engine/WindowCaptureService.swift` - Screen capture
 - `Sources/State/Utilities/URLValidator.swift` - URL validation
+- `Sources/Engine/ADE/ADEAgent.swift` - ADE orchestration
+- `Sources/Engine/ADE/ADEModels.swift` - ADE data models & provider detection
 
 ## License
 

@@ -8,6 +8,19 @@ struct TranslatedTextBlock {
     let confidence: Float
 }
 
+/// Text observation with coordinate system information
+private struct TextObservation {
+    let text: String
+    let rect: CGRect
+    let isNormalized: Bool  // true = ADE (0-1), false = OCR (pixels)
+    
+    init(_ text: String, _ rect: CGRect, normalized: Bool = false) {
+        self.text = text
+        self.rect = rect
+        self.isNormalized = normalized
+    }
+}
+
 /// Main engine that orchestrates window capture, OCR, and translation
 class RealTimeTranslationEngine {
     private let sourceLanguage: String
@@ -24,6 +37,7 @@ class RealTimeTranslationEngine {
     private let cache: TranslationCache
     private let ocrProcessor: OCRProcessor
     private let windowCapture: WindowCaptureService
+    private var adeAgent: ADEAgent?
     
     // Change detection
     private var lastImageHash: String = ""
@@ -64,6 +78,14 @@ class RealTimeTranslationEngine {
         self.cache = TranslationCache(maxSize: translatorState.maxCacheSize)
         self.ocrProcessor = OCRProcessor(translatorState: translatorState)
         self.windowCapture = WindowCaptureService()
+        
+        // Initialize ADE if enabled
+        if translatorState.adeEnabled {
+            self.adeAgent = ADEAgent(settings: translatorState.adeSettings)
+            log.info("ADE enabled (\(translatorState.adeDetectedProvider.displayName))", category: .engine)
+        } else {
+            self.adeAgent = nil
+        }
         
         // Configure logger
         log.configure(
@@ -183,7 +205,7 @@ class RealTimeTranslationEngine {
     private func runCaptureLoop() async {
         while isRunning && !Task.isCancelled {
             do {
-                guard let captureResult = await windowCapture.captureFrontmost() else {
+                guard var captureResult = await windowCapture.captureFrontmost() else {
                     try await Task.sleep(nanoseconds: 200_000_000)
                     continue
                 }
@@ -261,12 +283,61 @@ class RealTimeTranslationEngine {
                 lastImageHash = currentHash
                 let translationVersion = contentVersion  // Capture version for this batch
                 
+                let groupedObservations: [[TextObservation]]
                 let ocrStart = Date()
-                let textObservations = try await ocrProcessor.recognizeText(in: captureResult.image, sourceLanguage: sourceLanguage)
-                let ocrDuration = Date().timeIntervalSince(ocrStart)
-                log.ocrCompleted(regions: textObservations.count, duration: ocrDuration)
                 
-                let groupedObservations = ocrProcessor.groupObservations(textObservations)
+                if let adeAgent = adeAgent, translatorState.adeEnabled {
+                    // Use Agentic Document Extraction
+                    do {
+                        // Convert NSImage to CGImage for ADE
+                        guard let cgImage = captureResult.image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                            throw NSError(domain: "ADE", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert image"])
+                        }
+                        let adeBlocks = try await adeAgent.extract(from: cgImage, languageHint: sourceLanguage)
+                        let adeDuration = Date().timeIntervalSince(ocrStart)
+                        log.info("ADE extraction completed: \(adeBlocks.count) blocks in \(String(format: "%.0f", adeDuration * 1000))ms", category: .ocr)
+                        
+                        // Get fresh window bounds after ADE (window may have moved)
+                        let freshBounds = windowCapture.getCurrentWindowBounds() ?? captureResult.bounds
+                        if freshBounds != captureResult.bounds {
+                            let dx = freshBounds.origin.x - captureResult.bounds.origin.x
+                            let dy = freshBounds.origin.y - captureResult.bounds.origin.y
+                            log.debug("Window moved during ADE: delta=(\(Int(dx)),\(Int(dy)))", category: .engine)
+                        }
+                        
+                        // ADE returns normalized coordinates (0-1), keep them normalized and mark as such
+                        // Use fresh bounds for coordinate conversion to account for window movement
+                        groupedObservations = adeBlocks.map { block in
+                            [TextObservation(block.text, block.boundingBox, normalized: true)]
+                        }
+                        
+                        // Update captureResult bounds to fresh bounds for coordinate conversion
+                        captureResult = CaptureResult(
+                            image: captureResult.image,
+                            bounds: freshBounds,
+                            processID: captureResult.processID,
+                            appName: captureResult.appName,
+                            screen: captureResult.screen
+                        )
+                    } catch {
+                        log.error("ADE extraction failed: \(error.localizedDescription), falling back to OCR", category: .ocr)
+                        // Fall back to standard OCR
+                        let observations = try await ocrProcessor.recognizeText(in: captureResult.image, sourceLanguage: sourceLanguage)
+                        // OCR returns normalized coordinates (0-1) with origin at bottom-left, same as ADE
+                        groupedObservations = ocrProcessor.groupObservations(observations).map { group in
+                            group.map { TextObservation($0.0, $0.1, normalized: false) }  // normalized=false means Vision/OCR (bottom-left origin)
+                        }
+                    }
+                } else {
+                    // Use standard OCR
+                    let observations = try await ocrProcessor.recognizeText(in: captureResult.image, sourceLanguage: sourceLanguage)
+                    let ocrDuration = Date().timeIntervalSince(ocrStart)
+                    log.ocrCompleted(regions: observations.count, duration: ocrDuration)
+                    // OCR returns normalized coordinates (0-1) with origin at bottom-left
+                    groupedObservations = ocrProcessor.groupObservations(observations).map { group in
+                        group.map { TextObservation($0.0, $0.1, normalized: false) }  // normalized=false means Vision/OCR (bottom-left origin)
+                    }
+                }
                 
                 // Fast path: if all texts are cached, update positions immediately
                 let (cachedBlocks, uncachedGroups) = separateCachedGroups(groupedObservations, windowBounds: captureResult.bounds)
@@ -319,13 +390,13 @@ class RealTimeTranslationEngine {
     }
     
     /// Separates groups into cached (instant) and uncached (need translation)
-    private func separateCachedGroups(_ groups: [[(String, CGRect)]], windowBounds: CGRect) -> (cached: [TranslatedTextBlock], uncached: [[(String, CGRect)]]) {
+    private func separateCachedGroups(_ groups: [[TextObservation]], windowBounds: CGRect) -> (cached: [TranslatedTextBlock], uncached: [[TextObservation]]) {
         var cachedBlocks: [TranslatedTextBlock] = []
-        var uncachedGroups: [[(String, CGRect)]] = []
+        var uncachedGroups: [[TextObservation]] = []
         let minLen = translatorState.minTextLength
         
         for group in groups {
-            let combinedText = group.map { $0.0 }.joined(separator: " ")
+            let combinedText = group.map { $0.text }.joined(separator: " ")
             
             guard combinedText.count >= minLen else { continue }
             let letterCount = combinedText.filter { $0.isLetter }.count
@@ -338,20 +409,49 @@ class RealTimeTranslationEngine {
             if combinedText.contains(".fr/") || combinedText.contains(".com/") { continue }
             if combinedText.contains("|") { continue }
             
-            let minX = group.map { $0.1.minX }.min() ?? 0
-            let maxX = group.map { $0.1.maxX }.max() ?? 0
-            let minY = group.map { $0.1.minY }.min() ?? 0
-            let maxY = group.map { $0.1.maxY }.max() ?? 0
+            let minX = group.map { $0.rect.minX }.min() ?? 0
+            let maxX = group.map { $0.rect.maxX }.max() ?? 0
+            let minY = group.map { $0.rect.minY }.min() ?? 0
+            let maxY = group.map { $0.rect.maxY }.max() ?? 0
             let groupBox = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+            
+            // Coordinate systems:
+            // - CGWindowList: origin at TOP-LEFT of primary screen, Y increases downward
+            // - Overlay getLocalCenter: expects CG Global (origin at BOTTOM-LEFT), but does its own flip
+            // - Vision (OCR): normalized (0-1), origin at BOTTOM-LEFT of image
+            // - ADE: normalized (0-1), origin at TOP-LEFT of image
+            //
+            // Strategy: Send coordinates in the same system as CGWindowList (top-left origin)
+            // The overlay's getLocalCenter will flip Y using primaryHeight
+            
+            let isADESource = group.contains { $0.isNormalized }
+            
+            let normX = groupBox.origin.x
+            let normY = groupBox.origin.y
+            let normW = groupBox.width
+            let normH = groupBox.height
+            
+            // X is the same in both systems
+            let screenX = windowBounds.origin.x + normX * windowBounds.width
+            let screenW = normW * windowBounds.width
+            let screenH = normH * windowBounds.height
+            
+            // For Y in top-left system:
+            // The Y coordinate is distance from top of screen
+            // screenY = windowY + normY * height (both measured from top)
+            let screenY: CGFloat
+            if isADESource {
+                // ADE: normY is from top
+                screenY = windowBounds.origin.y + normY * windowBounds.height
+            } else {
+                // OCR: normY is from bottom, convert to top: Y_from_top = height - (normY + normH) * height
+                screenY = windowBounds.origin.y + (1 - normY - normH) * windowBounds.height
+            }
+            
+            let screenRect = CGRect(x: screenX, y: screenY, width: screenW, height: screenH)
             
             // Check cache with normalized key
             if let cachedTranslation = cache.get(combinedText) {
-                let screenRect = CGRect(
-                    x: windowBounds.origin.x + groupBox.origin.x * windowBounds.width,
-                    y: windowBounds.origin.y + (1 - groupBox.origin.y - groupBox.height) * windowBounds.height,
-                    width: groupBox.width * windowBounds.width,
-                    height: groupBox.height * windowBounds.height
-                )
                 cachedBlocks.append(TranslatedTextBlock(
                     originalText: combinedText,
                     translatedText: cachedTranslation,
@@ -366,13 +466,19 @@ class RealTimeTranslationEngine {
         return (cachedBlocks, uncachedGroups)
     }
     
-    private func translateGroups(_ groups: [[(String, CGRect)]], windowBounds: CGRect) async -> [TranslatedTextBlock] {
-        // Prepare valid groups first
-        var validGroups: [(text: String, box: CGRect)] = []
+    private func translateGroups(_ groups: [[TextObservation]], windowBounds: CGRect) async -> [TranslatedTextBlock] {
+        // Prepare valid groups first with coordinate system info
+        struct ValidGroup {
+            let text: String
+            let box: CGRect
+            let isADE: Bool  // true = ADE (top-left origin), false = OCR (bottom-left origin)
+        }
+        
+        var validGroups: [ValidGroup] = []
         let minLen = translatorState.minTextLength
         
         for group in groups {
-            let combinedText = group.map { $0.0 }.joined(separator: " ")
+            let combinedText = group.map { $0.text }.joined(separator: " ")
             
             guard combinedText.count >= minLen else { continue }
             let letterCount = combinedText.filter { $0.isLetter }.count
@@ -385,13 +491,14 @@ class RealTimeTranslationEngine {
             if combinedText.contains(".fr/") || combinedText.contains(".com/") { continue }
             if combinedText.contains("|") { continue }
             
-            let minX = group.map { $0.1.minX }.min() ?? 0
-            let maxX = group.map { $0.1.maxX }.max() ?? 0
-            let minY = group.map { $0.1.minY }.min() ?? 0
-            let maxY = group.map { $0.1.maxY }.max() ?? 0
+            let minX = group.map { $0.rect.minX }.min() ?? 0
+            let maxX = group.map { $0.rect.maxX }.max() ?? 0
+            let minY = group.map { $0.rect.minY }.min() ?? 0
+            let maxY = group.map { $0.rect.maxY }.max() ?? 0
             let groupBox = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
             
-            validGroups.append((combinedText, groupBox))
+            let isADE = group.contains { $0.isNormalized }
+            validGroups.append(ValidGroup(text: combinedText, box: groupBox, isADE: isADE))
         }
         
         // Translate with concurrency limit to avoid rate limits
@@ -404,7 +511,10 @@ class RealTimeTranslationEngine {
             while !pendingGroups.isEmpty || activeTaskCount > 0 {
                 // Add new tasks up to the limit
                 while activeTaskCount < maxConcurrentTranslations && !pendingGroups.isEmpty {
-                    let (text, groupBox) = pendingGroups.removeFirst()
+                    let group = pendingGroups.removeFirst()
+                    let text = group.text
+                    let groupBox = group.box
+                    let isADE = group.isADE
                     activeTaskCount += 1
                     
                     taskGroup.addTask { [self] in
@@ -491,12 +601,26 @@ class RealTimeTranslationEngine {
                             }
                         }
                         
-                        let screenRect = CGRect(
-                            x: windowBounds.origin.x + groupBox.origin.x * windowBounds.width,
-                            y: windowBounds.origin.y + (1 - groupBox.origin.y - groupBox.height) * windowBounds.height,
-                            width: groupBox.width * windowBounds.width,
-                            height: groupBox.height * windowBounds.height
-                        )
+                        // Convert to screen coordinates (top-left origin, same as CGWindowList)
+                        let normX = groupBox.origin.x
+                        let normY = groupBox.origin.y
+                        let normW = groupBox.width
+                        let normH = groupBox.height
+                        
+                        let screenX = windowBounds.origin.x + normX * windowBounds.width
+                        let screenW = normW * windowBounds.width
+                        let screenH = normH * windowBounds.height
+                        
+                        let screenY: CGFloat
+                        if isADE {
+                            // ADE: normY is from top
+                            screenY = windowBounds.origin.y + normY * windowBounds.height
+                        } else {
+                            // OCR: normY is from bottom, convert to top
+                            screenY = windowBounds.origin.y + (1 - normY - normH) * windowBounds.height
+                        }
+                        
+                        let screenRect = CGRect(x: screenX, y: screenY, width: screenW, height: screenH)
                         
                         return TranslatedTextBlock(
                             originalText: text,

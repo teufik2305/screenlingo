@@ -158,4 +158,39 @@ class WindowCaptureService {
         let hash = SHA256.hash(data: Data(samples))
         return hash.compactMap { String(format: "%02x", $0) }.joined().prefix(12).description
     }
+    
+    /// Get current window bounds without capturing image
+    /// Used to update window position after async operations like ADE
+    func getCurrentWindowBounds() -> CGRect? {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication,
+              frontApp.bundleIdentifier != Bundle.main.bundleIdentifier else {
+            return nil
+        }
+        
+        let pid = frontApp.processIdentifier
+        
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        
+        for window in windowList {
+            guard let ownerPID = window[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID == pid,
+                  let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"],
+                  let y = bounds["Y"],
+                  let width = bounds["Width"],
+                  let height = bounds["Height"] else {
+                continue
+            }
+            
+            // Skip tiny windows (likely utility windows)
+            guard width > 100 && height > 100 else { continue }
+            
+            return CGRect(x: x, y: y, width: width, height: height)
+        }
+        
+        return nil
+    }
 }

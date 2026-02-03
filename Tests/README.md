@@ -14,6 +14,11 @@ Or in Xcode: `Cmd+U`
 
 ```
 Tests/
+├── ADETests/                              # Agentic Document Extraction tests
+│   ├── ADEDetectedProviderTests.swift     # Provider auto-detection from URLs
+│   ├── ADECacheTests.swift                # Perceptual hash caching
+│   ├── ADECoordinateTests.swift           # Coordinate conversion (0-1 to screen)
+│   └── ADEErrorTests.swift                # ADE error handling & models
 ├── CacheTests/
 │   └── TranslationCacheTests.swift       # Cache operations, LRU, normalization
 ├── EngineTests/
@@ -24,6 +29,15 @@ Tests/
 ├── StateTests/
 │   └── TranslatorStateTests.swift        # Settings, language utils, service detection
 ```
+
+### Adding ADE Tests
+
+When adding ADE providers, consider testing:
+- Provider auto-detection from URL patterns
+- Coordinate conversion (normalized 0-1 to screen coordinates)
+- Response parsing (JSON to ExtractedTextBlock)
+- Fallback to OCR on ADE failure
+- Cache deduplication (perceptual hashing)
 
 ## Writing Tests
 

@@ -247,7 +247,7 @@ struct GeneralSettingsTab: View {
                                 
                                 // Quick URL buttons
                                 HStack(spacing: 8) {
-                                    Text("Presets:")
+                                    Text("Providers:")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     

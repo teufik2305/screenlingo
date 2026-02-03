@@ -145,6 +145,23 @@ struct MenuBarView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             
+            Divider()
+            
+            // ADE Toggle
+            Button(action: { state.adeEnabled.toggle() }) {
+                HStack {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .foregroundStyle(state.adeEnabled ? .blue : .secondary)
+                        .frame(width: 16)
+                    Text("Agentic Extraction")
+                        .foregroundStyle(state.adeEnabled ? .primary : .secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(appDelegate.isTranslating)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            
             // Hidden overlays section - only show when translating and has hidden items
             if appDelegate.isTranslating && !appDelegate.hiddenOverlays.isEmpty {
                 Divider()

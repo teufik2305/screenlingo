@@ -90,23 +90,36 @@ class RealTimeOverlayView: NSView {
         )
     }
     
-    /// Convert CG global coordinates to view-local coordinates for drawing
-    /// box: bounding box in CG global coordinates
+    /// Convert screen coordinates (top-left origin, CGWindowList style) to view-local coordinates
+    /// box: bounding box in screen coordinates (origin at top-left of primary screen)
     /// Returns: center point in view-local coordinates
     private func getLocalCenter(_ box: CGRect) -> CGPoint? {
-        guard let screen = targetScreen ?? NSScreen.main,
-              let primaryScreen = NSScreen.screens.first else {
+        guard let screen = targetScreen ?? NSScreen.main else {
             return nil
         }
         
+        // Input coordinates are in CGWindowList style (origin at top-left of primary screen)
+        // We need to convert to view-local coordinates (origin at top-left of view)
+        //
+        // CGWindowList Y: distance from top of primary screen downward
+        // View-local Y: distance from top of this screen downward
+        //
+        // For multi-monitor:
+        // Screen.frame.origin.y in Cocoa is the distance from bottom of primary to bottom of this screen
+        // But we need to handle the coordinate transform carefully
+        
+        // Get the primary screen to calculate the offset
+        guard let primaryScreen = NSScreen.screens.first else { return nil }
         let primaryHeight = primaryScreen.frame.height
         
-        // Convert CG global to Cocoa global
-        let cocoaMidY = primaryHeight - box.midY
+        // Convert CGWindowList Y (from top) to Cocoa Y (from bottom of primary)
+        // CGWindowList Y=0 is top of primary, CGWindowList Y=primaryHeight is bottom of primary
+        // Cocoa Y: 0 is bottom of primary, primaryHeight is top of primary
+        let cocoaGlobalY = primaryHeight - box.midY
         
-        // Convert Cocoa global to screen-local (view coordinates)
+        // Convert to screen-local
         let localX = box.midX - screen.frame.origin.x
-        let localY = cocoaMidY - screen.frame.origin.y
+        let localY = cocoaGlobalY - screen.frame.origin.y
         
         return CGPoint(x: localX, y: localY)
     }

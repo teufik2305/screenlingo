@@ -259,6 +259,68 @@ class TranslatorState: ObservableObject {
         didSet { log.info("Scroll cooldown: \(Int(scrollCooldown * 1000))ms", category: .settings) }
     }
     
+    // MARK: Agentic Document Extraction (ADE) Settings
+    
+    @AppStorage("adeEnabled", store: TranslatorState.preferencesStore) var adeEnabled: Bool = false {
+        didSet { log.info("ADE: \(adeEnabled ? "enabled" : "disabled")", category: .settings) }
+    }
+    @AppStorage("adeApiUrl", store: TranslatorState.preferencesStore) var adeApiUrl: String = "http://localhost:11434/v1/chat/completions" {
+        didSet { log.info("ADE API URL changed: \(adeApiUrl)", category: .settings) }
+    }
+    @AppStorage("adeApiKey", store: TranslatorState.preferencesStore) var adeApiKey: String = "" {
+        didSet { log.info("ADE API key changed", category: .settings) }
+    }
+    @AppStorage("adeModel", store: TranslatorState.preferencesStore) var adeModel: String = "qwen3-vl:8b" {
+        didSet { log.info("ADE model changed: \(adeModel)", category: .settings) }
+    }
+    @AppStorage("adeTimeout", store: TranslatorState.preferencesStore) var adeTimeout: Double = 30.0 {
+        didSet { log.info("ADE timeout: \(Int(adeTimeout))s", category: .settings) }
+    }
+    @AppStorage("adeEnableCaching", store: TranslatorState.preferencesStore) var adeEnableCaching: Bool = true {
+        didSet { log.info("ADE caching: \(adeEnableCaching ? "enabled" : "disabled")", category: .settings) }
+    }
+    
+    // ADE advanced options
+    @AppStorage("adeMergeFragments", store: TranslatorState.preferencesStore) var adeMergeFragments: Bool = true {
+        didSet { log.info("ADE merge fragments: \(adeMergeFragments ? "enabled" : "disabled")", category: .settings) }
+    }
+    @AppStorage("adeCorrectOCRErrors", store: TranslatorState.preferencesStore) var adeCorrectOCRErrors: Bool = true {
+        didSet { log.info("ADE OCR correction: \(adeCorrectOCRErrors ? "enabled" : "disabled")", category: .settings) }
+    }
+    @AppStorage("adeClassifyTextType", store: TranslatorState.preferencesStore) var adeClassifyTextType: Bool = true {
+        didSet { log.info("ADE text classification: \(adeClassifyTextType ? "enabled" : "disabled")", category: .settings) }
+    }
+    @AppStorage("adePreserveReadingOrder", store: TranslatorState.preferencesStore) var adePreserveReadingOrder: Bool = true {
+        didSet { log.info("ADE reading order: \(adePreserveReadingOrder ? "enabled" : "disabled")", category: .settings) }
+    }
+    
+    /// Auto-detected provider based on URL
+    var adeDetectedProvider: ADEDetectedProvider {
+        ADEDetectedProvider.detect(from: adeApiUrl)
+    }
+    
+    /// Build ADESettings from current state
+    var adeSettings: ADESettings {
+        ADESettings(
+            enabled: adeEnabled,
+            apiUrl: adeApiUrl,
+            apiKey: adeApiKey,
+            model: adeModel,
+            timeout: adeTimeout,
+            enableCaching: adeEnableCaching,
+            mergeFragments: adeMergeFragments,
+            correctOCRErrors: adeCorrectOCRErrors,
+            classifyTextType: adeClassifyTextType,
+            preserveReadingOrder: adePreserveReadingOrder
+        )
+    }
+    
+    /// Check if ADE can be used (has valid configuration)
+    var isADEAvailable: Bool {
+        guard adeEnabled else { return false }
+        return !adeApiUrl.isEmpty && !adeModel.isEmpty
+    }
+    
     /// Default system prompt for LLM translation (used when llmSystemPrompt is empty)
     static let defaultLLMSystemPrompt = "You are a professional translator. Translate the following text from {source} to {target}. Only respond with the translation, nothing else. Do not include explanations, notes, or quotation marks around the translation."
     

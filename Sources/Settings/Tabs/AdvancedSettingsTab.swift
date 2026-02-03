@@ -537,6 +537,191 @@ struct AdvancedSettingsTab: View {
                     }
                 }
                 
+                // Agentic Document Extraction (ADE)
+                settingsSection("Agentic Document Extraction (ADE)") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: $state.adeEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Enable ADE")
+                                Text("Use AI to intelligently extract text from images")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        
+                        if state.adeEnabled {
+                            Divider()
+                            
+                            // API URL
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("API URL")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                
+                                TextField("https://api.example.com/v1/chat/completions", text: $state.adeApiUrl)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.body, design: .monospaced))
+                                
+                                // Auto-detected provider indicator
+                                HStack(spacing: 6) {
+                                    Image(systemName: state.adeDetectedProvider.icon)
+                                        .foregroundStyle(providerColor(state.adeDetectedProvider))
+                                        .font(.caption)
+                                    Text("Detected: \(state.adeDetectedProvider.displayName)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 4)
+                                .padding(.horizontal, 8)
+                                .background(providerColor(state.adeDetectedProvider).opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                
+                                // Provider presets
+                                HStack(spacing: 8) {
+                                    Text("Providers:")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    
+                                    Button("Local") {
+                                        state.adeApiUrl = "http://localhost:11434/v1/chat/completions"
+                                        state.adeModel = "qwen3-vl:8b"
+                                    }
+                                    .font(.caption2)
+                                    .buttonStyle(.bordered)
+                                    
+                                    Button("Gemini") {
+                                        state.adeApiUrl = "https://generativelanguage.googleapis.com/v1beta"
+                                        state.adeModel = "gemini-2.5-flash"
+                                    }
+                                    .font(.caption2)
+                                    .buttonStyle(.bordered)
+                                    .tint(.blue)
+                                    
+                                    Button("Claude") {
+                                        state.adeApiUrl = "https://api.anthropic.com/v1/messages"
+                                        state.adeModel = "claude-3-haiku-20240307"
+                                    }
+                                    .font(.caption2)
+                                    .buttonStyle(.bordered)
+                                    .tint(.orange)
+                                    
+                                    Button("OpenAI") {
+                                        state.adeApiUrl = "https://api.openai.com/v1/chat/completions"
+                                        state.adeModel = "gpt-4o-mini"
+                                    }
+                                    .font(.caption2)
+                                    .buttonStyle(.bordered)
+                                    .tint(.green)
+                                }
+                            }
+                            
+                            Divider()
+                            
+                            // API Key
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("API Key")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                
+                                SecureField("Enter API key (if required)", text: $state.adeApiKey)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.body, design: .monospaced))
+                                
+                                Text("Required for Gemini, Claude, OpenAI. Not needed for local servers.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            
+                            Divider()
+                            
+                            // Model selection
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Model")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                
+                                TextField("Model name", text: $state.adeModel)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.body, design: .monospaced))
+                                
+                                // Model presets based on detected provider
+                                modelPresetsView(for: state.adeDetectedProvider)
+                            }
+                            
+                            Divider()
+                            
+                            // Timeout
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Timeout")
+                                    Spacer()
+                                    Text("\(Int(state.adeTimeout))s")
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: $state.adeTimeout, in: 10...120, step: 5)
+                                Text("Max time for ADE extraction. Increase for large images.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            
+                            Divider()
+                            
+                            // Advanced options
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Advanced Options")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                
+                                Toggle(isOn: $state.adeMergeFragments) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Merge Fragments")
+                                        Text("Combine broken text lines into coherent sentences")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                
+                                Toggle(isOn: $state.adeCorrectOCRErrors) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Correct OCR Errors")
+                                        Text("Fix common OCR mistakes (0 vs O, rn vs m)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                
+                                Toggle(isOn: $state.adeClassifyTextType) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Classify Text Type")
+                                        Text("Distinguish speech, narration, sound effects, etc.")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                
+                                Toggle(isOn: $state.adePreserveReadingOrder) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Preserve Reading Order")
+                                        Text("Maintain correct manga/comic reading sequence")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                
+                                Toggle(isOn: $state.adeEnableCaching) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Enable Caching")
+                                        Text("Remember extraction results to avoid duplicate processing")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 // Keyboard Shortcuts
                 settingsSection("Keyboard Shortcuts") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -694,6 +879,73 @@ struct AdvancedSettingsTab: View {
         case 2: return "Warnings and errors only"
         case 3: return "Errors only - minimal logging"
         default: return ""
+        }
+    }
+    
+    // MARK: - ADE Provider Helpers
+    
+    private func providerColor(_ provider: ADEDetectedProvider) -> Color {
+        switch provider {
+        case .local:
+            return .gray
+        case .gemini:
+            return .blue
+        case .anthropic:
+            return .orange
+        case .openAI:
+            return .green
+        case .other:
+            return .purple
+        }
+    }
+    
+    @ViewBuilder
+    private func modelPresetsView(for provider: ADEDetectedProvider) -> some View {
+        HStack(spacing: 8) {
+            Text("Presets:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            
+            switch provider {
+            case .local, .other:
+                ForEach(["qwen3-vl:8b", "qwen2-vl:7b", "llava:7b", "minicpm-v:8b"], id: \.self) { model in
+                    Button(model) {
+                        state.adeModel = model
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.bordered)
+                }
+                
+            case .gemini:
+                ForEach(["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-lite"], id: \.self) { model in
+                    Button(model) {
+                        state.adeModel = model
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+                }
+                
+            case .anthropic:
+                ForEach(["claude-3-haiku-20240307", "claude-3-sonnet-20240229", "claude-3-opus-20240229"], id: \.self) { model in
+                    Button(model) {
+                        state.adeModel = model
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                }
+                
+            case .openAI:
+                ForEach(["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"], id: \.self) { model in
+                    Button(model) {
+                        state.adeModel = model
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+                }
+            }
         }
     }
 }
