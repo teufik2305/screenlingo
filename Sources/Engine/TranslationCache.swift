@@ -5,6 +5,8 @@ class TranslationCache {
     private let queue = DispatchQueue(label: "translation.cache")
     private var cache: [String: String] = [:]
     private var order: [String] = []  // Track insertion order for LRU
+    private var inFlight: Set<String> = []  // Track texts currently being translated
+    private var inFlightContinuations: [String: [CheckedContinuation<String, Never>]] = [:]  // Waiters for in-flight translations
     private let maxSize: Int
     
     /// Codable structure for persisting cache
@@ -22,6 +24,48 @@ class TranslationCache {
     func get(_ text: String) -> String? {
         let normalizedKey = normalize(text)
         return queue.sync { cache[normalizedKey] }
+    }
+    
+    /// Check if a translation is currently in progress
+    func isInFlight(_ text: String) -> Bool {
+        let normalizedKey = normalize(text)
+        return queue.sync { inFlight.contains(normalizedKey) }
+    }
+    
+    /// Mark a translation as in-flight
+    func markInFlight(_ text: String) {
+        let normalizedKey = normalize(text)
+        queue.sync { _ = inFlight.insert(normalizedKey) }
+    }
+    
+    /// Wait for an in-flight translation to complete
+    func waitForInFlight(_ text: String) async -> String? {
+        let normalizedKey = normalize(text)
+        let result = await withCheckedContinuation { continuation in
+            queue.sync {
+                // Check if already completed
+                if let cached = cache[normalizedKey] {
+                    continuation.resume(returning: cached)
+                    return
+                }
+                // Register as waiter
+                inFlightContinuations[normalizedKey, default: []].append(continuation)
+            }
+        }
+        // Return nil if the result is empty (indicates error)
+        return result.isEmpty ? nil : result
+    }
+    
+    /// Complete an in-flight translation and notify waiters
+    func completeInFlight(_ text: String, translation: String) {
+        let normalizedKey = normalize(text)
+        let waiters = queue.sync {
+            inFlight.remove(normalizedKey)
+            let continuations = inFlightContinuations.removeValue(forKey: normalizedKey)
+            return continuations
+        }
+        // Notify all waiters outside the lock to avoid blocking
+        waiters?.forEach { $0.resume(returning: translation) }
     }
     
     /// Store translation in cache

@@ -715,6 +715,16 @@ class TranslatorState: ObservableObject {
                 var request = URLRequest(url: url)
                 request.timeoutInterval = apiTimeout
                 
+                // V3 API requires OAuth2 Authorization header and x-goog-user-project
+                if isGoogleCloudV3Api {
+                    if !googleAccessToken.isEmpty {
+                        request.setValue("Bearer \(googleAccessToken)", forHTTPHeaderField: "Authorization")
+                    }
+                    if let parent = googleCloudV3Parent, let projectId = parent.split(separator: "/").last {
+                        request.setValue(String(projectId), forHTTPHeaderField: "x-goog-user-project")
+                    }
+                }
+                
                 let (data, response) = try await URLSession.shared.data(for: request)
                 
                 guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {

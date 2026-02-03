@@ -38,6 +38,7 @@ actor TranslationService {
         llmMaxRetries: Int = 3,
         customApiUrl: String? = nil,
         googleApiKey: String? = nil,
+        googleAccessToken: String? = nil,
         forceSerbianLatin: Bool = false,
         timeout: TimeInterval = 30
     ) async throws -> TranslationResult {
@@ -101,7 +102,17 @@ actor TranslationService {
                     hasLoggedFallbackWarning = true
                 }
                 var apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
-                let apiKey = googleApiKey ?? ""
+                
+                // Check if this is a V3 API URL - use access token for V3, API key for V2/unofficial
+                let isV3Api = apiUrl.range(of: #"/v3[a-z0-9]*[/:]"#, options: .regularExpression) != nil
+                let credential = isV3Api ? (googleAccessToken ?? "") : (googleApiKey ?? "")
+                
+                // Debug logging for credential type (don't log actual credentials)
+                if isV3Api {
+                    log.debug("Google V3 API detected - using access token (length: \(credential.count))", category: .translation)
+                } else {
+                    log.debug("Google V2/unofficial API - using API key (length: \(credential.count))", category: .translation)
+                }
                 
                 // Validate and sanitize Google API URL
                 let (sanitizedUrl, validation) = URLValidator.validateAndSanitize(apiUrl)
@@ -112,15 +123,25 @@ actor TranslationService {
                     apiUrl = sanitizedUrl
                 }
                 
-                provider = GoogleTranslateProvider(apiUrl: apiUrl, apiKey: apiKey)
+                provider = GoogleTranslateProvider(apiUrl: apiUrl, apiKey: credential)
                 (usedApple, usedLibre, usedLLM) = (false, false, false)
-                log.debug("Using Google Translate (fallback): \(apiUrl)", category: .translation)
+                log.debug("Using Google Translate \(isV3Api ? "V3" : "") (fallback): \(apiUrl)", category: .translation)
             }
         }
         // Priority 4: Google Translate API (fallback)
         else {
             var apiUrl = customApiUrl?.isEmpty == false ? customApiUrl! : defaultApiUrl
-            let apiKey = googleApiKey ?? ""
+            
+            // Check if this is a V3 API URL - use access token for V3, API key for V2/unofficial
+            let isV3Api = apiUrl.range(of: #"/v3[a-z0-9]*[/:]"#, options: .regularExpression) != nil
+            let credential = isV3Api ? (googleAccessToken ?? "") : (googleApiKey ?? "")
+            
+            // Debug logging for credential type (don't log actual credentials)
+            if isV3Api {
+                log.debug("Google V3 API detected - using access token (length: \(credential.count))", category: .translation)
+            } else {
+                log.debug("Google V2/unofficial API - using API key (length: \(credential.count))", category: .translation)
+            }
             
             // Validate and sanitize Google API URL
             let (sanitizedUrl, validation) = URLValidator.validateAndSanitize(apiUrl)
@@ -131,9 +152,13 @@ actor TranslationService {
                 apiUrl = sanitizedUrl
             }
             
-            provider = GoogleTranslateProvider(apiUrl: apiUrl, apiKey: apiKey)
+            provider = GoogleTranslateProvider(apiUrl: apiUrl, apiKey: credential)
             (usedApple, usedLibre, usedLLM) = (false, false, false)
-            log.debug("Using Google Translate: \(apiUrl)", category: .translation)
+            if isV3Api {
+                log.debug("Using Google Translate V3: \(apiUrl)", category: .translation)
+            } else {
+                log.debug("Using Google Translate: \(apiUrl)", category: .translation)
+            }
         }
         
         // Translate

@@ -415,12 +415,25 @@ class RealTimeTranslationEngine {
                             log.cacheHit(text)
                             log.translationCompleted(text, cached, cached: true, usedAppleTranslation: false, duration: 0)
                             translation = cached
+                        } else if cache.isInFlight(text) {
+                            // Another task is already translating this text - wait for it
+                            log.debug("Waiting for in-flight translation: '\(text.prefix(20))...'", category: .cache)
+                            if let result = await cache.waitForInFlight(text) {
+                                log.cacheHit(text)
+                                log.translationCompleted(text, result, cached: true, usedAppleTranslation: false, duration: 0)
+                                translation = result
+                            } else {
+                                return nil
+                            }
                         } else {
                             // Check if we're in rate limit backoff period
                             if let lastRateLimit = lastRateLimitTime,
                                Date().timeIntervalSince(lastRateLimit) < translatorState.rateLimitBackoff {
                                 return nil
                             }
+                            
+                            // Mark as in-flight BEFORE throttling to prevent duplicate requests
+                            cache.markInFlight(text)
                             
                             // Request throttling - ensures minimum interval between API requests
                             if translatorState.requestThrottleEnabled {
@@ -454,7 +467,8 @@ class RealTimeTranslationEngine {
                                     llmConfidenceThreshold: translatorState.llmConfidenceThreshold,
                                     llmMaxRetries: translatorState.llmMaxRetries,
                                     customApiUrl: translatorState.customApiUrl.isEmpty ? nil : translatorState.customApiUrl,
-                                    googleApiKey: translatorState.googleCredential.isEmpty ? nil : translatorState.googleCredential,
+                                    googleApiKey: translatorState.googleApiKey.isEmpty ? nil : translatorState.googleApiKey,
+                                    googleAccessToken: translatorState.googleAccessToken.isEmpty ? nil : translatorState.googleAccessToken,
                                     forceSerbianLatin: translatorState.forceSerbianLatin,
                                     timeout: translatorState.apiTimeout
                                 )
@@ -462,14 +476,17 @@ class RealTimeTranslationEngine {
                                 translation = result.text
                                 log.translationCompleted(text, translation, cached: false, usedAppleTranslation: result.usedAppleTranslation, usedLibreTranslate: result.usedLibreTranslate, usedLLM: result.usedLLM, duration: duration)
                                 cache.set(text, translation: translation)
+                                cache.completeInFlight(text, translation: translation)
                             } catch let error as TranslationError {
                                 if case .rateLimitExceeded = error {
                                     lastRateLimitTime = Date()
                                 }
                                 log.translationFailed(text, error: error)
+                                cache.completeInFlight(text, translation: "")  // Complete with empty to unblock waiters
                                 return nil
                             } catch {
                                 log.translationFailed(text, error: error)
+                                cache.completeInFlight(text, translation: "")  // Complete with empty to unblock waiters
                                 return nil
                             }
                         }

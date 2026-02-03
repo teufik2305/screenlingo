@@ -13,7 +13,14 @@ actor GoogleTranslateProvider: TranslationProvider {
     
     /// Check if URL matches v3 API pattern (v3, v3beta1, v3p1beta1, etc.)
     private func isV3Api(_ url: String) -> Bool {
-        if let regex = try? NSRegularExpression(pattern: #"/v3[a-z0-9]*[/:]"#, options: .caseInsensitive) {
+        // More robust pattern matching for v3 API URLs
+        // Pattern: /v3[letters/numbers/_]*[/:]
+        // This should match URLs like:
+        // - /v3/
+        // - /v3beta1/
+        // - /v3p1beta1/
+        // - etc.
+        if let regex = try? NSRegularExpression(pattern: #"/v3[a-zA-Z0-9_]*[/:]"#, options: .caseInsensitive) {
             let range = NSRange(url.startIndex..., in: url)
             return regex.firstMatch(in: url, range: range) != nil
         }
@@ -113,6 +120,20 @@ actor GoogleTranslateProvider: TranslationProvider {
         // V3 API requires OAuth2 Bearer token, not API key
         if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            log.debug("[\(providerName)] V3 API: Authorization header set (token length: \(apiKey.count))", category: .api)
+        } else {
+            log.warning("[\(providerName)] V3 API: No access token provided!", category: .api)
+        }
+        
+        // V3 API requires x-goog-user-project header for quota/billing when using Application Default Credentials
+        // Extract project ID from URL (format: .../v3/projects/{project-id}:translateText)
+        if let projectMatch = apiUrl.range(of: #"projects/([^/:]+)"#, options: .regularExpression) {
+            let projectPart = String(apiUrl[projectMatch])
+            // projectPart is like "projects/gen-lang-client-0456449051", extract just the ID
+            if let projectId = projectPart.split(separator: "/").last {
+                request.setValue(String(projectId), forHTTPHeaderField: "x-goog-user-project")
+                log.debug("[\(providerName)] V3 API: x-goog-user-project header set to: \(projectId)", category: .api)
+            }
         }
         
         var body: [String: Any] = [
