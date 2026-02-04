@@ -19,6 +19,12 @@ struct SettingsView: View {
                         Label("Appearance", systemImage: "paintbrush")
                     }
                 
+                // Detection Tab (OCR + ADE)
+                DetectionSettingsTab(state: state)
+                    .tabItem {
+                        Label("Detection", systemImage: "text.viewfinder")
+                    }
+                
                 // Filters Tab
                 FiltersSettingsTab(state: state)
                     .tabItem {
